@@ -52,6 +52,24 @@
 #error Hardware counters not implemented, MLX4_PMD_SOFT_COUNTERS is required.
 #endif
 
+/* 6WIND/Intel DPDK compatibility. */
+#ifndef DPDK_6WIND
+
+struct rte_rxq_stats {
+	uint64_t ipackets;  /**< Total of successfully received packets. */
+	uint64_t ibytes;    /**< Total of successfully received bytes. */
+	uint64_t idropped;  /**< Total of packets dropped when RX ring full. */
+	uint64_t rx_nombuf; /**< Total of RX mbuf allocation failures. */
+};
+
+struct rte_txq_stats {
+	uint64_t opackets; /**< Total of successfully sent packets. */
+	uint64_t obytes;   /**< Total of successfully sent bytes. */
+	uint64_t odropped; /**< Total of packets not sent when TX ring full. */
+};
+
+#endif /* DPDK_6WIND */
+
 /* Helper to get the size of a memory pool. */
 static size_t mp_total_size(struct rte_mempool *mp)
 {
@@ -1548,6 +1566,8 @@ mlx4_stats_reset(struct rte_eth_dev *dev)
 #endif
 }
 
+#ifdef DPDK_6WIND
+
 static void
 mlx4_rxq_stats_get(struct rte_eth_dev *dev, uint16_t idx,
 		   struct rte_rxq_stats *stats)
@@ -1597,6 +1617,8 @@ mlx4_txq_stats_reset(struct rte_eth_dev *dev, uint16_t idx)
 	/* FIXME: reset hardware counters. */
 #endif
 }
+
+#endif /* DPDK_6WIND */
 
 static void
 mlx4_mac_addr_remove(struct rte_eth_dev *dev, uint32_t index)
@@ -1703,6 +1725,8 @@ mlx4_link_update(struct rte_eth_dev *dev, int wait_to_complete)
 	return -1;
 }
 
+#ifdef DPDK_6WIND
+
 static int
 mlx4_dev_control(struct rte_eth_dev *dev, uint32_t command, void *arg)
 {
@@ -1755,6 +1779,8 @@ mlx4_dev_control(struct rte_eth_dev *dev, uint32_t command, void *arg)
 	}
 	return -ENOTSUP;
 }
+
+#endif /* DPDK_6WIND */
 
 static void
 mlx4_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
@@ -1823,10 +1849,12 @@ static struct eth_dev_ops mlx4_dev_ops = {
 	.link_update = mlx4_link_update,
 	.stats_get = mlx4_stats_get,
 	.stats_reset = mlx4_stats_reset,
+#ifdef DPDK_6WIND
 	.rxq_stats_get = mlx4_rxq_stats_get,
 	.txq_stats_get = mlx4_txq_stats_get,
 	.rxq_stats_reset = mlx4_rxq_stats_reset,
 	.txq_stats_reset = mlx4_txq_stats_reset,
+#endif /* DPDK_6WIND */
 	.dev_infos_get = mlx4_dev_infos_get,
 	.vlan_filter_set = mlx4_vlan_filter_set,
 	.rx_queue_setup = mlx4_rx_queue_setup,
@@ -1836,7 +1864,9 @@ static struct eth_dev_ops mlx4_dev_ops = {
 	.flow_ctrl_set = NULL,
 	.mac_addr_remove = mlx4_mac_addr_remove,
 	.mac_addr_add = mlx4_mac_addr_add,
+#ifdef DPDK_6WIND
 	.dev_control = mlx4_dev_control,
+#endif /* DPDK_6WIND */
 	.fdir_add_signature_filter = NULL,
 	.fdir_update_signature_filter = NULL,
 	.fdir_remove_signature_filter = NULL,
@@ -1973,11 +2003,12 @@ mlx4_dev_init(struct eth_driver *drv, struct rte_eth_dev *dev)
 		if (test == 0)
 			return -ENODEV;
 	}
-#else
+#else /* RTE_PCI_DRV_MULTIPLE */
+	(void)drv;
 	/* RTE_PCI_DRV_MULTIPLE not supported, only check the first port. */
 	if (mlx4_dev[idx].ports & test)
 		return -ENODEV;
-#endif
+#endif /* RTE_PCI_DRV_MULTIPLE */
 	list = ibv_get_device_list(&i);
 	if (list == NULL) {
 		assert(errno);
@@ -2072,7 +2103,7 @@ static struct eth_driver mlx4_driver = {
 		.id_table = mlx4_pci_id_map,
 #ifdef RTE_PCI_DRV_MULTIPLE
 		.drv_flags = RTE_PCI_DRV_MULTIPLE
-#endif
+#endif /* RTE_PCI_DRV_MULTIPLE */
 	},
 	.eth_dev_init = mlx4_dev_init,
 	.dev_private_size = sizeof(struct priv)
