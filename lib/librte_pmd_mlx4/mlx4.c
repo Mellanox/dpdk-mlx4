@@ -38,6 +38,7 @@
 #include <rte_ethdev.h>
 #include <rte_mbuf.h>
 #include <rte_errno.h>
+#include <rte_mempool.h>
 #ifdef PEDANTIC
 #pragma GCC diagnostic error "-pedantic"
 #endif
