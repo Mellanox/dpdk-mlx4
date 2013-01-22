@@ -1481,19 +1481,19 @@ mlx4_dev_close(struct rte_eth_dev *dev)
 	dev->rx_pkt_burst = removed_rx_burst;
 	dev->tx_pkt_burst = removed_tx_burst;
 	if (priv->rxqs != NULL) {
+		/* XXX race condition if mlx4_rx_burst() is still running. */
+		usleep(1000);
 		dev->data->nb_rx_queues = 0;
 		dev->data->rx_queues = (void *)removed_queue;
-		/* XXX race condition if mlx4_rx_burst() is still running. */
-		usleep(1);
 		for (i = 0; (i != priv->rxqs_n); ++i)
 			rxq_cleanup(&(*priv->rxqs)[i]);
 		free(priv->rxqs);
 	}
 	if (priv->txqs != NULL) {
+		/* XXX race condition if mlx4_tx_burst() is still running. */
+		usleep(1000);
 		dev->data->nb_tx_queues = 0;
 		dev->data->tx_queues = (void *)removed_queue;
-		/* XXX race condition if mlx4_tx_burst() is still running. */
-		usleep(1);
 		for (i = 0; (i != priv->txqs_n); ++i)
 			txq_cleanup(&(*priv->txqs)[i]);
 		free(priv->txqs);
