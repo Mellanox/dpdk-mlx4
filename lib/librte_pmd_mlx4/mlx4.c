@@ -1446,7 +1446,7 @@ mlx4_dev_stop(struct rte_eth_dev *dev)
 }
 
 /* See mlx4_dev_infos_get() and mlx4_dev_close(). */
-static void *const removed_queue[512];
+static void *removed_queue[512];
 
 static uint16_t
 removed_tx_burst(struct igb_tx_queue *igb_txq, struct rte_mbuf **pkts,
@@ -2078,8 +2078,8 @@ mlx4_dev_init(struct eth_driver *drv, struct rte_eth_dev *dev)
 				     (const uint8_t (*)[ETHER_ADDR_LEN])
 				     priv->mac[0].addr_bytes));
 	claim_zero(priv_mac_addr_add(priv, 1,
-				     (const uint8_t (*)[ETHER_ADDR_LEN])
-				     "\xff\xff\xff\xff\xff\xff"));
+				     &(const uint8_t [ETHER_ADDR_LEN])
+				     { "\xff\xff\xff\xff\xff\xff" }));
 	dev->dev_ops = &mlx4_dev_ops;
 	dev->data->mac_addrs = priv->mac;
 	return 0;
