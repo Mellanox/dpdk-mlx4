@@ -397,9 +397,6 @@ txq_complete(struct txq *txq)
 		uint64_t wr_id = wc->wr_id;
 		struct ibv_send_wr *wr = &(*txq->wrs)[wr_id];
 		unsigned int sge_id = (wr_id * txq->sges_wr_n);
-#ifdef MLX4_PMD_SOFT_COUNTERS
-		unsigned int byte_len = 0; /* XXX workaround. */
-#endif
 		int j;
 
 		assert(wr_id < txq->wrs_n);
@@ -415,19 +412,12 @@ txq_complete(struct txq *txq)
 			++txq->stats.odropped;
 #endif
 		}
-		else {
+		else
 			assert(wc->opcode == IBV_WC_SEND);
-#ifdef MLX4_PMD_SOFT_COUNTERS
-			/* Increase sent packets and bytes counters. */
-			++txq->stats.opackets;
-			/*
-			 * XXX for some reason, wc->byte_len is always 0.
-			 * There's a workaround in the loop below.
-			 */
-			/* txq->stats.obytes += wc->byte_len; */
-#endif
-		}
-		/* XXX check number of bytes transferred (wc->byte_len). */
+		/*
+		 * XXX check number of bytes transferred (wc->byte_len).
+		 * XXX for some reason, wc->byte_len is always 0.
+		 */
 		/* Free associated SGEs mbufs. */
 		assert(wr->num_sge > 0);
 		assert((unsigned int)wr->num_sge <= txq->sges_wr_n);
@@ -443,21 +433,12 @@ txq_complete(struct txq *txq)
 			 */
 			m->pkt.next = NULL;
 			rte_pktmbuf_free(m);
-#ifdef MLX4_PMD_SOFT_COUNTERS
-			/* XXX workaround for missing wc->byte_len. */
-			byte_len += (*txq->sges)[sge_id].length;
-#endif
 #ifndef NDEBUG
 			/* SGE poisoning shouldn't hurt. */
 			memset(&(*txq->sges)[sge_id], 0x44,
 			       sizeof((*txq->sges)[sge_id]));
 #endif
 		}
-#ifdef MLX4_PMD_SOFT_COUNTERS
-		/* XXX workaround for missing wc->byte_len. */
-		if (wc->status == IBV_WC_SUCCESS)
-			txq->stats.obytes += byte_len;
-#endif
 		--wrs_comp;
 		++wrs_free;
 	}
@@ -590,6 +571,10 @@ mlx4_tx_burst(struct igb_tx_queue *igb_txq, struct rte_mbuf **pkts,
 			sge[seg_n].lkey = lkey;
 			/* Increase number of segments (SGEs). */
 			++seg_n;
+#ifdef MLX4_PMD_SOFT_COUNTERS
+			/* Increase sent bytes counter. */
+			txq->stats.obytes += m->pkt.data_len;
+#endif
 		}
 		/* Update WR. */
 		assert(wr->wr_id == wr_id);
@@ -601,6 +586,10 @@ mlx4_tx_burst(struct igb_tx_queue *igb_txq, struct rte_mbuf **pkts,
 			wr_id = 0;
 	}
 	*next = NULL;
+#ifdef MLX4_PMD_SOFT_COUNTERS
+	/* Increase sent packets counter. */
+	++txq->stats.opackets;
+#endif
 	err = ibv_post_send(txq->qp, dummy.next, &bad_wr);
 	if (err) {
 		struct ibv_send_wr *wr = dummy.next;
