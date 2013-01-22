@@ -39,6 +39,7 @@
 #include <rte_mbuf.h>
 #include <rte_errno.h>
 #include <rte_mempool.h>
+#include <rte_version.h>
 #ifdef PEDANTIC
 #pragma GCC diagnostic error "-pedantic"
 #endif
@@ -70,6 +71,23 @@ struct rte_txq_stats {
 };
 
 #endif /* DPDK_6WIND */
+
+#ifndef DPDK_VERSION
+#define DPDK_VERSION(x, y, z) ((x) << 16 | (y) << 8 | (z))
+#endif /* DPDK_VERSION */
+
+#ifndef BUILT_DPDK_VERSION
+#define BUILT_DPDK_VERSION \
+	DPDK_VERSION(RTE_VER_MAJOR, RTE_VER_MINOR, RTE_VER_PATCH_LEVEL)
+#endif /* BUILT_DPDK_VERSION */
+
+#if BUILT_DPDK_VERSION < DPDK_VERSION(1, 3, 0)
+typedef struct igb_tx_queue dpdk_txq_t;
+typedef struct igb_rx_queue dpdk_rxq_t;
+#else /* BUILT_DPDK_VERSION */
+typedef void dpdk_txq_t;
+typedef void dpdk_rxq_t;
+#endif /* BUILT_DPDK_VERSION */
 
 /* Helper to get the size of a memory pool. */
 static size_t mp_total_size(struct rte_mempool *mp)
@@ -190,8 +208,8 @@ struct priv {
 	 * Pointers to the above elements, for IGB compatibility.
 	 * DPDK requires this for burst() functions.
 	 */
-	struct igb_rx_queue **igb_rxqs;
-	struct igb_tx_queue **igb_txqs;
+	struct dpdk_rxq_t **dpdk_rxqs;
+	struct dpdk_txq_t **dpdk_txqs;
 };
 
 /* Device configuration. */
@@ -203,8 +221,8 @@ mlx4_dev_configure(struct rte_eth_dev *dev, uint16_t rxqs_n, uint16_t txqs_n)
 	struct ibv_port_attr port_attr;
 	struct rxq (*rxqs)[rxqs_n];
 	struct txq (*txqs)[txqs_n];
-	struct igb_rx_queue *(*igb_rxqs)[rxqs_n];
-	struct igb_tx_queue *(*igb_txqs)[txqs_n];
+	struct dpdk_rxq_t *(*dpdk_rxqs)[rxqs_n];
+	struct dpdk_txq_t *(*dpdk_txqs)[txqs_n];
 
 	if ((errno = ibv_query_port(priv->ctx, priv->port, &port_attr))) {
 		DEBUG("port query failed: %s", strerror(errno));
@@ -225,10 +243,10 @@ mlx4_dev_configure(struct rte_eth_dev *dev, uint16_t rxqs_n, uint16_t txqs_n)
 		return -EINVAL;
 	}
 	if (((rxqs = realloc(priv->rxqs, (sizeof(*rxqs) +
-					  sizeof(*igb_rxqs)))) == NULL) ||
+					  sizeof(*dpdk_rxqs)))) == NULL) ||
 	    (priv->rxqs = rxqs,
 	     ((txqs = realloc(priv->txqs, (sizeof(*txqs) +
-					   sizeof(*igb_txqs)))) == NULL))) {
+					   sizeof(*dpdk_txqs)))) == NULL))) {
 		DEBUG("unable to allocate RX or TX queues descriptors: %s",
 		      strerror(errno));
 		return -errno;
@@ -246,19 +264,17 @@ mlx4_dev_configure(struct rte_eth_dev *dev, uint16_t rxqs_n, uint16_t txqs_n)
 	/*
 	 * Copy this information to dev. We use the extra space allocated
 	 * at the end of (*rxqs)[] and (*txqs)[] to store an array of pointers
-	 * to their elements (*(*igb_rxqs)[] and *(*igb_txqs)[]). The DPDK
+	 * to their elements (*(*dpdk_rxqs)[] and *(*dpdk_txqs)[]). The DPDK
 	 * will use them for the *burst() functions.
 	 */
-	dev->data->tx_queues = (struct igb_tx_queue **)&(*txqs)[txqs_n];
+	dev->data->tx_queues = (dpdk_txq_t **)&(*txqs)[txqs_n];
 	dev->data->nb_tx_queues = txqs_n;
-	dev->data->rx_queues = (struct igb_rx_queue **)&(*rxqs)[rxqs_n];
+	dev->data->rx_queues = (dpdk_rxq_t **)&(*rxqs)[rxqs_n];
 	dev->data->nb_rx_queues = rxqs_n;
 	while (txqs_n-- != 0)
-		dev->data->tx_queues[txqs_n] =
-			(struct igb_tx_queue *)&(*txqs)[txqs_n];
+		dev->data->tx_queues[txqs_n] = (dpdk_txq_t *)&(*txqs)[txqs_n];
 	while (rxqs_n-- != 0)
-		dev->data->rx_queues[rxqs_n] =
-			(struct igb_rx_queue *)&(*rxqs)[rxqs_n];
+		dev->data->rx_queues[rxqs_n] = (dpdk_rxq_t *)&(*rxqs)[rxqs_n];
 	return 0;
 }
 
@@ -503,10 +519,9 @@ txq_mp2mr(struct txq *txq, struct rte_mempool *mp)
 }
 
 static uint16_t
-mlx4_tx_burst(struct igb_tx_queue *igb_txq, struct rte_mbuf **pkts,
-	      uint16_t pkts_n)
+mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 {
-	struct txq *txq = (struct txq *)igb_txq;
+	struct txq *txq = (struct txq *)dpdk_txq;
 	struct ibv_sge (*sges)[] = txq->sges;
 	struct rte_mbuf *(*bufs)[] = txq->bufs;
 	struct ibv_send_wr dummy;
@@ -1104,10 +1119,9 @@ rxq_cleanup(struct rxq *rxq)
 }
 
 static uint16_t
-mlx4_rx_burst(struct igb_rx_queue *igb_rxq, struct rte_mbuf **pkts,
-	      uint16_t pkts_n)
+mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 {
-	struct rxq *rxq = (struct rxq *)igb_rxq;
+	struct rxq *rxq = (struct rxq *)dpdk_rxq;
 	struct ibv_sge (*sges)[] = rxq->sges;
 	struct rte_mbuf *(*bufs)[] = rxq->bufs;
 	struct ibv_wc wcs[pkts_n];
@@ -1439,20 +1453,18 @@ mlx4_dev_stop(struct rte_eth_dev *dev)
 static void *removed_queue[512];
 
 static uint16_t
-removed_tx_burst(struct igb_tx_queue *igb_txq, struct rte_mbuf **pkts,
-		 uint16_t pkts_n)
+removed_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 {
-	(void)igb_txq;
+	(void)dpdk_txq;
 	(void)pkts;
 	(void)pkts_n;
 	return 0;
 }
 
 static uint16_t
-removed_rx_burst(struct igb_rx_queue *igb_rxq, struct rte_mbuf **pkts,
-		 uint16_t pkts_n)
+removed_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 {
-	(void)igb_rxq;
+	(void)dpdk_rxq;
 	(void)pkts;
 	(void)pkts_n;
 	return 0;
