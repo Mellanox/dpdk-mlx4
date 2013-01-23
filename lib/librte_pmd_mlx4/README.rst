@@ -24,7 +24,6 @@ This driver is based on ``libibverbs`` and currently supports:
     
 Unsupported features:
 
-- Locking for live reconfiguration operations on RX/TX queues.
 - Promiscuous mode.
 - Broadcast frames (only partially supported).
 - VLAN filtering doesn't work (not interpreted in kernel driver).
