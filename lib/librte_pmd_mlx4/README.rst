@@ -1,3 +1,6 @@
+.. Copyright (c) <2012-2013>, 6WIND
+   All rights reserved.
+
 ============================
 Mellanox ConnectX-3 DPDK PMD
 ============================
