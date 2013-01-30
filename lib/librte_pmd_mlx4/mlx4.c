@@ -350,7 +350,7 @@ txq_free_wrs(struct txq *txq)
 		return;
 	for (i = 0; (i != txq->sges_n); ++i) {
 		if ((*bufs)[i] != NULL)
-			rte_pktmbuf_free((*bufs)[i]);
+			rte_pktmbuf_free_seg((*bufs)[i]);
 	}
 	free(bufs);
 }
@@ -443,12 +443,9 @@ txq_complete(struct txq *txq)
 			assert(sge_id < txq->sges_n);
 			(*bufs)[sge_id] = NULL;
 			assert(m != NULL);
-			/*
-			 * Prevent rte_pktmbuf_free() from freeing segments,
-			 * we'll recycle them ourselves. XXX
-			 */
+			/* Make sure this segment is unlinked. */
 			m->pkt.next = NULL;
-			rte_pktmbuf_free(m);
+			rte_pktmbuf_free_seg(m);
 #ifndef NDEBUG
 			/* SGE poisoning shouldn't hurt. */
 			memset(&(*txq->sges)[sge_id], 0x44,
@@ -829,7 +826,7 @@ error:
 	if (bufs != NULL) {
 		for (i = 0; (i != sges_n); ++i) {
 			if ((*bufs)[i] != NULL)
-				rte_pktmbuf_free((*bufs)[i]);
+				rte_pktmbuf_free_seg((*bufs)[i]);
 		}
 		free(bufs);
 	}
@@ -856,7 +853,7 @@ rxq_free_wrs(struct rxq *rxq)
 		return;
 	for (i = 0; (i != rxq->sges_n); ++i) {
 		if ((*bufs)[i] != NULL)
-			rte_pktmbuf_free((*bufs)[i]);
+			rte_pktmbuf_free_seg((*bufs)[i]);
 	}
 	free(bufs);
 }
@@ -1190,11 +1187,8 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 				DEBUG("rxq=%p, wr_id=%" PRIu64 ":"
 				      " can't allocate a new mbuf",
 				      (void *)rxq, wr_id);
-				while (newbuf != NULL) {
-					seg = newbuf->pkt.next;
+				if (newbuf != NULL)
 					rte_pktmbuf_free(newbuf);
-					newbuf = seg;
-				}
 				/* Increase out of memory counter. */
 				++rxq->stats.rx_nombuf;
 				goto repost;
