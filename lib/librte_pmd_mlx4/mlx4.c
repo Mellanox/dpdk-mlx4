@@ -657,6 +657,12 @@ mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	(void)conf; /* Thresholds configuration (ignored). */
 	DEBUG("%p: configuring queue %u for %u descriptors",
 	      (void *)dev, idx, desc);
+	if ((desc == 0) || (desc % MLX4_PMD_SGE_WR_N)) {
+		DEBUG("%p: invalid number of TX descriptors (must be a"
+		      " multiple of %d)", (void *)dev, desc);
+		return -EINVAL;
+	}
+	desc /= MLX4_PMD_SGE_WR_N;
 	if (idx >= priv->txqs_n) {
 		DEBUG("%p: queue index out of range (%u >= %u)",
 		      (void *)dev, idx, priv->txqs_n);
@@ -1323,6 +1329,12 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	(void)conf; /* Thresholds configuration (ignored). */
 	DEBUG("%p: configuring queue %u for %u descriptors",
 	      (void *)dev, idx, desc);
+	if ((desc == 0) || (desc % MLX4_PMD_SGE_WR_N)) {
+		DEBUG("%p: invalid number of RX descriptors (must be a"
+		      " multiple of %d)", (void *)dev, desc);
+		return -EINVAL;
+	}
+	desc /= MLX4_PMD_SGE_WR_N;
 	if (idx >= priv->rxqs_n) {
 		DEBUG("%p: queue index out of range (%u >= %u)",
 		      (void *)dev, idx, priv->rxqs_n);
