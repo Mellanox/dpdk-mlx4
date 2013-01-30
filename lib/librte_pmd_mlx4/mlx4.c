@@ -1223,8 +1223,10 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			sge->addr = (uintptr_t)newbuf->buf_addr;
 			assert(sge->length == seg_room);
 			assert(sge->lkey == rxq->mr->lkey);
+			/* Update spent segment port ID. */
+			seg->pkt.in_port = rxq->port_id;
+			/* Fetch next replacement segment. */
 			newbuf = newbuf->pkt.next;
-			(*bufs)[j]->pkt.in_port = rxq->port_id;
 			(*bufs)[j]->pkt.next = NULL;
 			if (sz <= seg_room) {
 				seg->pkt.next = NULL;
