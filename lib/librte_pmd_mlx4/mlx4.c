@@ -688,9 +688,14 @@ mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		.recv_cq = tmpl.cq,
 		.cap = {
 			/* Max number of outstanding WRs. */
-			.max_send_wr = priv->device_attr.max_qp_wr,
+			.max_send_wr = ((priv->device_attr.max_qp_wr < desc) ?
+					priv->device_attr.max_qp_wr :
+					desc),
 			/* Max number of scatter/gather elements in a WR. */
-			.max_send_sge = priv->device_attr.max_sge
+			.max_send_sge = ((priv->device_attr.max_sge <
+					  MLX4_PMD_SGE_WR_N) ?
+					 priv->device_attr.max_sge :
+					 MLX4_PMD_SGE_WR_N)
 		},
 		.qp_type = IBV_QPT_RAW_PACKET,
 		/* Get completion events. */
@@ -1360,9 +1365,14 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		.recv_cq = tmpl.cq,
 		.cap = {
 			/* Max number of outstanding WRs. */
-			.max_recv_wr = priv->device_attr.max_qp_wr,
+			.max_recv_wr = ((priv->device_attr.max_qp_wr < desc) ?
+					priv->device_attr.max_qp_wr :
+					desc),
 			/* Max number of scatter/gather elements in a WR. */
-			.max_recv_sge = priv->device_attr.max_sge
+			.max_recv_sge = ((priv->device_attr.max_sge <
+					  MLX4_PMD_SGE_WR_N) ?
+					 priv->device_attr.max_sge :
+					 MLX4_PMD_SGE_WR_N)
 		},
 		.qp_type = IBV_QPT_RAW_PACKET
 	};
