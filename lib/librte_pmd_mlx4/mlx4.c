@@ -783,6 +783,9 @@ rxq_alloc_wrs(struct rxq *rxq, unsigned int wrs_n, unsigned int sges_wr_n)
 		/* Headroom is normally reserved by rte_pktmbuf_alloc(). */
 		assert(((uintptr_t)buf->buf_addr + RTE_PKTMBUF_HEADROOM) ==
 		       (uintptr_t)buf->pkt.data);
+		/* Buffer is supposed to be empty. */
+		assert(rte_pktmbuf_data_len(buf) == 0);
+		assert(rte_pktmbuf_pkt_len(buf) == 0);
 		/* Configure SGE without headroom. */
 		sge->addr = (uintptr_t)buf->buf_addr;
 		sge->length = buf->buf_len;
@@ -797,9 +800,13 @@ rxq_alloc_wrs(struct rxq *rxq, unsigned int wrs_n, unsigned int sges_wr_n)
 		}
 		else {
 			/* Otherwise remove headroom for subsequent SGEs. */
-			claim_nonzero(rte_pktmbuf_prepend
-				      (buf, RTE_PKTMBUF_HEADROOM));
+			assert(((uintptr_t)buf->pkt.data -
+				RTE_PKTMBUF_HEADROOM) ==
+			       (uintptr_t)buf->buf_addr);
+			buf->pkt.data = buf->buf_addr;
 		}
+		/* Redundant check to make sure tailroom works as intended. */
+		assert(sge->length == rte_pktmbuf_tailroom(buf));
 	}
 	DEBUG("%p: allocated %u SGEs and mbufs (%u WRs with %u SGEs)",
 	      (void *)rxq, sges_n, wrs_n, sges_wr_n);
@@ -1195,7 +1202,10 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			}
 			seg->pkt.next = newbuf;
 			newbuf = seg;
-			seg_room = rte_pktmbuf_tailroom(newbuf);
+			seg_room = (newbuf->buf_len -
+				    ((uintptr_t)newbuf->pkt.data -
+				     (uintptr_t)newbuf->buf_addr));
+			assert(seg_room == rte_pktmbuf_tailroom(newbuf));
 			if (sz <= seg_room)
 				break;
 			sz -= seg_room;
@@ -1208,32 +1218,50 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		sz = wc->byte_len;
 		j = idx;
 		while (1) {
-			struct rte_mbuf *seg = (*bufs)[j];
-			struct ibv_sge *sge = &(*sges)[j];
-			uint32_t seg_room = rte_pktmbuf_tailroom(seg);
+			struct rte_mbuf *seg = (*bufs)[j]; /* Spent segment. */
+			struct ibv_sge *sge = &(*sges)[j]; /* Spent SGE. */
+			uint32_t seg_room = (seg->buf_len -
+					     ((uintptr_t)seg->pkt.data -
+					      (uintptr_t)seg->buf_addr));
 
+			assert(seg_room == rte_pktmbuf_tailroom(seg));
+			/* Affect replacement segment. */
 			(*bufs)[j] = newbuf;
-			/* Configure SGE without headroom. */
-			sge->addr = (uintptr_t)newbuf->buf_addr;
+			/* Use the same headroom as seg. */
+			assert(rte_pktmbuf_data_len(newbuf) == 0);
+			assert(rte_pktmbuf_pkt_len(newbuf) == 0);
+			newbuf->pkt.data = (void *)
+				((uintptr_t)newbuf->buf_addr +
+				 ((uintptr_t)seg->pkt.data -
+				  (uintptr_t)seg->buf_addr));
+			/* Reconfigure SGE for newbuf. */
+			sge->addr = (uintptr_t)newbuf->pkt.data;
 			assert(sge->length == seg_room);
 			assert(sge->lkey == rxq->mr->lkey);
 			/* Update spent segment port ID. */
 			seg->pkt.in_port = rxq->port_id;
 			/* Fetch next replacement segment. */
 			newbuf = newbuf->pkt.next;
+			/* Unlink current replacement segment. */
 			(*bufs)[j]->pkt.next = NULL;
 			if (sz <= seg_room) {
+				/* Last segment. */
 				seg->pkt.next = NULL;
-				claim_nonzero(rte_pktmbuf_append(seg, sz));
+				assert(seg_room <= rte_pktmbuf_tailroom(seg));
+				seg->pkt.data_len = sz;
 				break;
 			}
+			/* Sanity check. */
 			assert(newbuf != NULL);
-			seg->pkt.next = (*bufs)[(j + 1)];
-			claim_nonzero(rte_pktmbuf_append(seg, seg_room));
+			assert(seg->pkt.next == NULL);
+			assert(seg_room <= rte_pktmbuf_tailroom(seg));
+			/* Update seg. */
+			seg->pkt.data_len = seg_room;
+			seg->pkt.next = (*bufs)[(++j)];
 			sz -= seg_room;
-			++j;
 		}
 		assert(newbuf == NULL);
+		pktbuf->pkt.pkt_len = wc->byte_len;
 		*(pkts++) = pktbuf;
 		++ret;
 #ifdef MLX4_PMD_SOFT_COUNTERS
