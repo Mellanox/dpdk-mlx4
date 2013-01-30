@@ -159,7 +159,7 @@ struct txq {
 	} mp2mr[MLX4_PMD_TX_MP_CACHE]; /* MP to MR translation table. */
 	struct ibv_cq *cq; /* Completion Queue. */
 	struct ibv_qp *qp; /* Queue Pair. */
-	unsigned int wrs_n; /* (*wrs)[] and (*status)[] lengths. */
+	unsigned int wrs_n; /* (*wrs)[] length. */
 	unsigned int sges_n; /* (*sges)[] and (*bufs)[] lengths. */
 	unsigned int sges_wr_n; /* Maximum Scatter/gather elements per WR. */
 	struct ibv_send_wr (*wrs)[]; /* Work Requests. */
