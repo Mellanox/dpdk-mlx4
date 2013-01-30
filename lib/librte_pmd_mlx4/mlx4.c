@@ -588,6 +588,10 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			txq->stats.obytes += m->pkt.data_len;
 #endif
 		}
+#ifdef MLX4_PMD_SOFT_COUNTERS
+		/* Increase sent packets counter. */
+		++txq->stats.opackets;
+#endif
 		/* Update WR. */
 		assert(wr->wr_id == wr_id);
 		assert(wr->sg_list == sge);
@@ -598,10 +602,6 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			wr_id = 0;
 	}
 	*next = NULL;
-#ifdef MLX4_PMD_SOFT_COUNTERS
-	/* Increase sent packets counter. */
-	++txq->stats.opackets;
-#endif
 	err = ibv_post_send(txq->qp, dummy.next, &bad_wr);
 	if (err) {
 		struct ibv_send_wr *wr = dummy.next;
@@ -1563,6 +1563,8 @@ mlx4_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 	for (i = 0; (i != priv->rxqs_n); ++i) {
 		tmp.ipackets += (*priv->rxqs)[i].stats.ipackets;
 		tmp.ibytes += (*priv->rxqs)[i].stats.ibytes;
+		tmp.ierrors += (*priv->rxqs)[i].stats.idropped;
+		tmp.rx_nombuf += (*priv->rxqs)[i].stats.rx_nombuf;
 	}
 	for (i = 0; (i != priv->txqs_n); ++i) {
 		tmp.opackets += (*priv->txqs)[i].stats.opackets;
