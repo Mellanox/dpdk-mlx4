@@ -66,6 +66,9 @@
 /* Number of elements in array. */
 #define elemof(a) (sizeof(a) / sizeof((a)[0]))
 
+/* Cast pointer p to structure member m to its parent structure of type t. */
+#define containerof(p, t, m) ((t *)((uint8_t *)(p) - offsetof(t, m)))
+
 /* Debugging */
 #ifndef NDEBUG
 #include <stdio.h>
