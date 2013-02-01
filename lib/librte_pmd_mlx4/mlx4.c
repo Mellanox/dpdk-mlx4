@@ -40,6 +40,7 @@
 #include <rte_errno.h>
 #include <rte_mempool.h>
 #include <rte_version.h>
+#include <rte_prefetch.h>
 #ifdef PEDANTIC
 #pragma GCC diagnostic error "-pedantic"
 #endif
@@ -1192,10 +1193,16 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		do {
 			struct ibv_sge *sge = &elt->sges[j];
 			struct rte_mbuf *seg = elt->bufs[j];
-			struct rte_mbuf *rep = rte_pktmbuf_alloc(rxq->mp);
+			struct rte_mbuf *rep;
 			uint32_t seg_headroom;
 			uint32_t seg_tailroom;
 
+			/*
+			 * Fetch initial bytes of packet descriptor into a
+			 * cacheline while calling rte_pktmbuf_alloc().
+			 */
+			rte_prefetch0(&seg->pkt);
+			rep = rte_pktmbuf_alloc(rxq->mp);
 			if (rep == NULL) {
 				/*
 				 * Unable to allocate a replacement mbuf,
