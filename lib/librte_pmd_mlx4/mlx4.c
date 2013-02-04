@@ -1264,8 +1264,9 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 				      (void *)rxq, wr_id);
 				if (pkt_buf != NULL)
 					rte_pktmbuf_free(pkt_buf);
-				/* Increase out of memory counter. */
+				/* Increase out of memory counters. */
 				++rxq->stats.rx_nombuf;
+				++rxq->priv->dev->data->rx_mbuf_alloc_failed;
 				goto repost;
 			}
 			seg_headroom = ((uintptr_t)seg->pkt.data -
