@@ -551,7 +551,6 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	unsigned int elts_cur = txq->elts_cur;
 	unsigned int i;
 	unsigned int max;
-	int ret = 0;
 	int err;
 
 	txq_complete(txq);
@@ -671,10 +670,7 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	assert(txq->elts_comp <= txq->elts_used);
 	assert(txq->elts_used <= txq->elts_n);
 	assert(txq->elts_free <= txq->elts_n);
-	/* Increment dropped packets counter. */
-	txq->stats.odropped += (max - i);
-	ret = i;
-	return ret;
+	return i;
 }
 
 static int
