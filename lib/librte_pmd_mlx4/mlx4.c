@@ -411,8 +411,8 @@ txq_complete(struct txq *txq)
 		assert(wr->num_sge > 0);
 		for (j = 0; (j != wr->num_sge); ++j)
 			rte_pktmbuf_free_seg((*bufs)[j]);
-		++elts_used;
-		--elts_free;
+		--elts_used;
+		++elts_free;
 	}
 	for (i = 0; (i != wcs_n); ++i) {
 		struct ibv_wc *wc = &wcs[i];
