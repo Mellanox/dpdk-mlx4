@@ -671,8 +671,8 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	assert(txq->elts_comp <= txq->elts_used);
 	assert(txq->elts_used <= txq->elts_n);
 	assert(txq->elts_free <= txq->elts_n);
-	/* Increase dropped packets counter for ignored packets. */
-	txq->stats.odropped += (pkts_n - i);
+	/* Increment dropped packets counter. */
+	txq->stats.odropped += (max - i);
 	ret = i;
 	return ret;
 }
