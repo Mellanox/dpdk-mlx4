@@ -378,16 +378,13 @@ txq_complete(struct txq *txq)
 	int i;
 	int ret = 0;
 
-	if (elts_comp == 0) {
-		assert(elts_used == 0);
-		assert(elts_free == txq->elts_n);
+	assert((elts_used + elts_free) == txq->elts_n);
+	if (elts_comp == 0)
 		return 0;
-	}
 #ifdef DEBUG_SEND
 	DEBUG("%p: processing %u work requests completions",
 	      (void *)txq, elts_comp);
 #endif
-	assert((elts_used + elts_free) == txq->elts_n);
 	assert(elts_comp <= elts_used);
 
 	/* XXX careful with stack overflows. */
@@ -638,12 +635,16 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	/* The last WR is the only one asking for a completion event. */
 	containerof(wr_next, struct ibv_send_wr, next)->
 		send_flags |= IBV_SEND_SIGNALED;
+	/* Make sure all packets have been processed in the previous loop. */
+	assert(i == max);
 	err = ibv_post_send(txq->qp, head.next, &bad_wr);
 	if (err) {
-		struct txq_elt *elt = containerof(bad_wr, struct txq_elt, wr);
+		struct txq_elt *bad = containerof(bad_wr, struct txq_elt, wr);
+		struct txq_elt *first = bad;
 
-		/* Failed element index. */
-		i = (elt - &(*elts)[0]);
+		/* Number of packets that will be sent. */
+		for (i = 0; (first->comp != NULL); ++i)
+			first = first->comp;
 		assert(i < max);
 		DEBUG("%p: ibv_post_send(): failed for WR %p"
 		      " (only %u out of %u WR(s) posted): %s",
@@ -655,11 +656,13 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		/* Completion event has been lost. Link these elements to the
 		 * list of those without a completion event. They will be
 		 * processed the next time a completion event is received. */
-		assert((*elts)[0].comp == NULL);
-		if (elt->comp != NULL) {
-			(*elts)[0].comp = txq->lost_comp;
-			txq->lost_comp = elt->comp;
+		assert(first->comp == NULL);
+		if (bad->comp != NULL) {
+			first->comp = txq->lost_comp;
+			txq->lost_comp = bad->comp;
 		}
+		else
+			assert(bad == first);
 	}
 	else
 		++txq->elts_comp;
