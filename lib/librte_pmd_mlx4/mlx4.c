@@ -649,7 +649,7 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		DEBUG("%p: ibv_post_send(): failed for WR %p"
 		      " (only %u out of %u WR(s) posted): %s",
 		      (void *)txq->priv, (void *)bad_wr, i, max,
-		      strerror(err));
+		      ((err <= -1) ? "Internal error" : strerror(err)));
 		/* Rollback elts_cur. */
 		elts_cur -= (max - i);
 		elts_cur %= txq->elts_n;
