@@ -663,6 +663,16 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		}
 		else
 			assert(bad == first);
+#ifdef MLX4_PMD_SOFT_COUNTERS
+		/* Decrement packets and bytes counters for each element that
+		 * won't be sent. */
+		while (bad != NULL) {
+			--txq->stats.opackets;
+			assert(bad->bufs[0] != NULL);
+			txq->stats.obytes -= bad->bufs[0]->pkt.pkt_len;
+			bad = containerof(bad->wr.next, struct txq_elt, wr);
+		}
+#endif
 	}
 	else
 		++txq->elts_comp;
