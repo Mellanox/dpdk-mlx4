@@ -113,7 +113,6 @@ struct rxq_elt {
 /* RX queue descriptor. */
 struct rxq {
 	struct priv *priv; /* Back pointer to private data. */
-	struct ibv_pd *pd; /* Protection Domain. */
 	struct rte_mempool *mp; /* Memory Pool for allocations. */
 	size_t mp_size; /* mp size in bytes. */
 	struct ibv_mr *mr; /* Memory Region (for mp). */
@@ -145,7 +144,6 @@ struct txq_elt {
 /* TX queue descriptor. */
 struct txq {
 	struct priv *priv; /* Back pointer to private data. */
-	struct ibv_pd *pd; /* Protection Domain. */
 	struct {
 		struct rte_mempool *mp; /* Cached Memory Pool. */
 		size_t mp_size; /* mp size in bytes. */
@@ -169,6 +167,7 @@ struct priv {
 	struct ibv_context *ctx; /* Verbs context. */
 	struct ibv_device_attr device_attr; /* Device properties. */
 	struct ibv_port_attr port_attr; /* Physical port properties. */
+	struct ibv_pd *pd; /* Protection Domain. */
 	/*
 	 * MAC addresses array and configuration bit-field.
 	 * An extra entry that cannot be modified by the DPDK is reserved
@@ -363,8 +362,6 @@ txq_cleanup(struct txq *txq)
 		assert(txq->mp2mr[i].mr != NULL);
 		claim_zero(ibv_dereg_mr(txq->mp2mr[i].mr));
 	}
-	if (txq->pd != NULL)
-		claim_zero(ibv_dealloc_pd(txq->pd));
 	memset(txq, 0, sizeof(*txq));
 }
 
@@ -510,7 +507,7 @@ txq_mp2mr(struct txq *txq, struct rte_mempool *mp)
 	/* Add a new entry, register MR first. */
 	DEBUG("%p: discovered new memory pool %p", (void *)txq, (void *)mp);
 	mp_size = mp_total_size(mp);
-	mr = ibv_reg_mr(txq->pd, mp, mp_size,
+	mr = ibv_reg_mr(txq->priv->pd, mp, mp_size,
 			(IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE));
 	if (mr == NULL) {
 		DEBUG("%p: unable to configure MR, ibv_reg_mr() failed.",
@@ -716,13 +713,6 @@ mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		      (void *)dev, idx, priv->txqs_n);
 		return -EOVERFLOW;
 	}
-	tmpl.pd = ibv_alloc_pd(priv->ctx);
-	if (tmpl.pd == NULL) {
-		ret = ENOMEM;
-		DEBUG("%p: PD creation failure: %s",
-		      (void *)dev, strerror(ret));
-		goto error;
-	}
 	/* MRs will be registered in mp2mr[] later. */
 	tmpl.cq = ibv_create_cq(priv->ctx, desc, NULL, NULL, 0);
 	if (tmpl.cq == NULL) {
@@ -756,7 +746,7 @@ mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		 * TX burst. */
 		.sq_sig_all = 0
 	};
-	tmpl.qp = ibv_create_qp(tmpl.pd, &attr.init);
+	tmpl.qp = ibv_create_qp(priv->pd, &attr.init);
 	if (tmpl.qp == NULL) {
 		ret = ENOMEM;
 		DEBUG("%p: QP creation failure: %s",
@@ -1182,8 +1172,6 @@ rxq_cleanup(struct rxq *rxq)
 		claim_zero(ibv_destroy_cq(rxq->cq));
 	if (rxq->mr != NULL)
 		claim_zero(ibv_dereg_mr(rxq->mr));
-	if (rxq->pd != NULL)
-		claim_zero(ibv_dealloc_pd(rxq->pd));
 	memset(rxq, 0, sizeof(*rxq));
 }
 
@@ -1388,17 +1376,10 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		      (void *)dev, idx, priv->rxqs_n);
 		return -EOVERFLOW;
 	}
-	tmpl.pd = ibv_alloc_pd(priv->ctx);
-	if (tmpl.pd == NULL) {
-		ret = ENOMEM;
-		DEBUG("%p: PD creation failure: %s",
-		      (void *)dev, strerror(ret));
-		goto error;
-	}
 	/* Get mempool size. */
 	tmpl.mp_size = mp_total_size(mp);
 	/* Use the entire RX mempool as the memory region. */
-	tmpl.mr = ibv_reg_mr(tmpl.pd, mp, tmpl.mp_size,
+	tmpl.mr = ibv_reg_mr(priv->pd, mp, tmpl.mp_size,
 			     (IBV_ACCESS_LOCAL_WRITE |
 			      IBV_ACCESS_REMOTE_WRITE));
 	if (tmpl.mr == NULL) {
@@ -1436,7 +1417,7 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		},
 		.qp_type = IBV_QPT_RAW_PACKET
 	};
-	tmpl.qp = ibv_create_qp(tmpl.pd, &attr.init);
+	tmpl.qp = ibv_create_qp(priv->pd, &attr.init);
 	if (tmpl.qp == NULL) {
 		ret = ENOMEM;
 		DEBUG("%p: QP creation failure: %s",
@@ -1590,6 +1571,8 @@ mlx4_dev_close(struct rte_eth_dev *dev)
 			txq_cleanup(&(*priv->txqs)[i]);
 		free(priv->txqs);
 	}
+	assert(priv->pd != NULL);
+	claim_zero(ibv_dealloc_pd(priv->pd));
 	claim_zero(ibv_close_device(priv->ctx));
 	memset(priv, 0, sizeof(*priv));
 }
@@ -2075,6 +2058,7 @@ mlx4_dev_init(struct eth_driver *drv, struct rte_eth_dev *dev)
 	uint32_t port = 1; /* ports are indexed from one */
 	uint32_t test = 1;
 	struct ibv_context *ctx = NULL;
+	struct ibv_pd *pd = NULL;
 	struct ibv_device_attr device_attr;
 	int idx;
 	int i;
@@ -2140,24 +2124,29 @@ mlx4_dev_init(struct eth_driver *drv, struct rte_eth_dev *dev)
 		return -err;
 	}
 	DEBUG("device opened");
-	if (ibv_query_device(ctx, &device_attr)) {
-		err = errno;
-		ibv_close_device(ctx);
-		errno = err;
-		return -err;
-	}
+	if (ibv_query_device(ctx, &device_attr))
+		goto error;
 	DEBUG("%u port(s) detected", device_attr.phys_port_cnt);
 	if ((port - 1) >= device_attr.phys_port_cnt) {
 		DEBUG("port %u not available, skipping interface", port);
-		return -ENODEV;
+		errno = ENODEV;
+		goto error;
 	}
 	DEBUG("using port %u (%08" PRIx32 ")", port, test);
+	/* Allocate protection domain. */
+	pd = ibv_alloc_pd(ctx);
+	if (pd == NULL) {
+		DEBUG("PD allocation failure");
+		errno = ENOMEM;
+		goto error;
+	}
 	mlx4_dev[idx].ports |= test;
 	memset(priv, 0, sizeof(*priv));
 	priv->dev = dev;
 	priv->ctx = ctx;
 	priv->device_attr = device_attr;
 	priv->port = port;
+	priv->pd = pd;
 	priv->mtu = 1500; /* Unused MTU. */
 	guid_to_mac(&priv->mac[0].addr_bytes, priv->device_attr.node_guid);
 	BITFIELD_SET(priv->mac_configured, 0);
@@ -2178,6 +2167,14 @@ mlx4_dev_init(struct eth_driver *drv, struct rte_eth_dev *dev)
 	dev->dev_ops = &mlx4_dev_ops;
 	dev->data->mac_addrs = priv->mac;
 	return 0;
+error:
+	err = errno;
+	if (pd)
+		claim_zero(ibv_dealloc_pd(pd));
+	if (ctx)
+		claim_zero(ibv_close_device(ctx));
+	errno = err;
+	return -err;
 }
 
 static struct rte_pci_id mlx4_pci_id_map[] = {
