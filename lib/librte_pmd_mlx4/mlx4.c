@@ -210,26 +210,11 @@ static int
 mlx4_dev_configure(struct rte_eth_dev *dev, uint16_t rxqs_n, uint16_t txqs_n)
 {
 	struct priv *priv = dev->data->dev_private;
-	struct ibv_port_attr port_attr;
 	struct rxq (*rxqs)[rxqs_n];
 	struct txq (*txqs)[txqs_n];
 	struct dpdk_rxq_t *(*dpdk_rxqs)[rxqs_n];
 	struct dpdk_txq_t *(*dpdk_txqs)[txqs_n];
 
-	if ((errno = ibv_query_port(priv->ctx, priv->port, &port_attr))) {
-		DEBUG("port query failed: %s", strerror(errno));
-		return -errno;
-	}
-	if (port_attr.state != IBV_PORT_ACTIVE) {
-		DEBUG("bad state for port %d: \"%s\" (%d)",
-		      priv->port, ibv_port_state_str(port_attr.state),
-		      port_attr.state);
-		/*
-		 * Uncomment this to prevent the device from being configured
-		 * when link state is bad.
-		 */
-		/* return -EIO; */
-	}
 	if ((rxqs_n < priv->rxqs_n) || (txqs_n < priv->txqs_n)) {
 		DEBUG("lowering the number of RX or TX queues is unsupported");
 		return -EINVAL;
@@ -243,8 +228,6 @@ mlx4_dev_configure(struct rte_eth_dev *dev, uint16_t rxqs_n, uint16_t txqs_n)
 		      strerror(errno));
 		return -errno;
 	}
-	/* Save port attributes. */
-	priv->port_attr = port_attr;
 	/* Save queues. */
 	priv->txqs = txqs;
 	memset(&(*rxqs)[priv->rxqs_n], 0,
@@ -2060,6 +2043,7 @@ mlx4_dev_init(struct eth_driver *drv, struct rte_eth_dev *dev)
 	struct ibv_context *ctx = NULL;
 	struct ibv_pd *pd = NULL;
 	struct ibv_device_attr device_attr;
+	struct ibv_port_attr port_attr;
 	int idx;
 	int i;
 
@@ -2133,6 +2117,15 @@ mlx4_dev_init(struct eth_driver *drv, struct rte_eth_dev *dev)
 		goto error;
 	}
 	DEBUG("using port %u (%08" PRIx32 ")", port, test);
+	/* Check port status. */
+	if ((errno = ibv_query_port(ctx, port, &port_attr))) {
+		DEBUG("port query failed: %s", strerror(errno));
+		goto error;
+	}
+	if (port_attr.state != IBV_PORT_ACTIVE)
+		DEBUG("bad state for port %d: \"%s\" (%d)",
+		      port, ibv_port_state_str(port_attr.state),
+		      port_attr.state);
 	/* Allocate protection domain. */
 	pd = ibv_alloc_pd(ctx);
 	if (pd == NULL) {
@@ -2145,6 +2138,7 @@ mlx4_dev_init(struct eth_driver *drv, struct rte_eth_dev *dev)
 	priv->dev = dev;
 	priv->ctx = ctx;
 	priv->device_attr = device_attr;
+	priv->port_attr = port_attr;
 	priv->port = port;
 	priv->pd = pd;
 	priv->mtu = 1500; /* Unused MTU. */
