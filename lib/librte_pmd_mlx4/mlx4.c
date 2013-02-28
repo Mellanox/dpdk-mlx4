@@ -538,7 +538,7 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 #ifdef DEBUG_SEND
 		DEBUG("%p: can't send %u packet(s), no WR(s) available"
 		      " (%u waiting for completion)",
-		      (void *)txq->priv, pkts_n, txq->elts_used);
+		      (void *)txq, pkts_n, txq->elts_used);
 #endif
 		return 0;
 	}
@@ -1308,7 +1308,7 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	/* Repost WRs. */
 #ifdef DEBUG_RECV
 	DEBUG("%p: reposting %d WRs starting from %" PRIu64 " (%p)",
-	      (void *)dev, wcs_n, wcs[0].wr_id, (void *)head.next);
+	      (void *)rxq, wcs_n, wcs[0].wr_id, (void *)head.next);
 #endif
 	i = ibv_post_recv(rxq->qp, head.next, &bad_wr);
 	if (i) {
