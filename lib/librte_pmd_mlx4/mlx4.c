@@ -13,7 +13,7 @@
  * - VLAN filtering is implemented but doesn't work. Flow specifications
  *   (ibv_flow_spec) store information about it, but the kernel currently
  *   ignores it.
- * - RSS/RCA is unimplemented.
+ * - RSS hash key and options cannot be modified.
  * - Hardware counters aren't implemented.
  */
 
@@ -191,7 +191,12 @@ struct priv {
 	uint8_t port; /* Physical port number. */
 	unsigned int started:1; /* Device started, flows enabled. */
 	unsigned int promisc:1; /* Device in promiscuous mode. */
+	unsigned int hw_qpg:1; /* QP groups are supported. */
+	unsigned int hw_tss:1; /* TSS is supported. */
+	unsigned int hw_rss:1; /* RSS is supported. */
+	unsigned int rss:1; /* RSS is enabled. */
 	/* RX/TX queues. */
+	struct rxq rxq_parent; /* Parent queue when RSS is enabled. */
 	unsigned int rxqs_n; /* Number of RX queues. */
 	unsigned int txqs_n; /* Number of TX queues. */
 	struct rxq (*rxqs)[]; /* RX queues. */
@@ -207,6 +212,11 @@ struct priv {
 /* Device configuration. */
 
 static int
+rxq_setup(struct rte_eth_dev *dev, struct rxq *rxq, uint16_t desc,
+	  unsigned int socket, const struct rte_eth_rxconf *conf,
+	  struct rte_mempool *mp);
+
+static int
 mlx4_dev_configure(struct rte_eth_dev *dev, uint16_t rxqs_n, uint16_t txqs_n)
 {
 	struct priv *priv = dev->data->dev_private;
@@ -214,10 +224,33 @@ mlx4_dev_configure(struct rte_eth_dev *dev, uint16_t rxqs_n, uint16_t txqs_n)
 	struct txq (*txqs)[txqs_n];
 	struct dpdk_rxq_t *(*dpdk_rxqs)[rxqs_n];
 	struct dpdk_txq_t *(*dpdk_txqs)[txqs_n];
+	int alloc_rss_parent = 0;
 
 	if ((rxqs_n < priv->rxqs_n) || (txqs_n < priv->txqs_n)) {
 		DEBUG("lowering the number of RX or TX queues is unsupported");
 		return -EINVAL;
+	}
+	if (rxqs_n != priv->rxqs_n) {
+		/* Extra work when the number of RX queues is changed. */
+		if (priv->rss) {
+			/* XXX unsupported when RSS is already enabled,
+			 * not safe with DPDK 1.2. */
+			return -ENOMEM;
+		}
+		if ((!priv->hw_rss) || (rxqs_n == 1)) {
+			if (rxqs_n != 1) {
+				DEBUG("only a single RX queue can be"
+				      " configured when hardware doesn't"
+				      " support RSS");
+				return -EINVAL;
+			}
+		}
+		else {
+			assert(rxqs_n > 1);
+			assert(priv->hw_rss);
+			/* Enable RSS. */
+			alloc_rss_parent = 1;
+		}
 	}
 	if (((rxqs = realloc(priv->rxqs, (sizeof(*rxqs) +
 					  sizeof(*dpdk_rxqs)))) == NULL) ||
@@ -250,6 +283,19 @@ mlx4_dev_configure(struct rte_eth_dev *dev, uint16_t rxqs_n, uint16_t txqs_n)
 		dev->data->tx_queues[txqs_n] = (dpdk_txq_t *)&(*txqs)[txqs_n];
 	while (rxqs_n-- != 0)
 		dev->data->rx_queues[rxqs_n] = (dpdk_rxq_t *)&(*rxqs)[rxqs_n];
+	if (alloc_rss_parent) {
+		int ret;
+
+		priv->rss = 1;
+		ret = rxq_setup(dev, &priv->rxq_parent, 0, 0, NULL, NULL);
+		if (ret) {
+			/* Parent allocation failed, child queues can't be
+			 * configured. */
+			priv->rxqs_n = 0;
+			priv->rss = 0;
+			return ret;
+		}
+	}
 	return 0;
 }
 
@@ -1085,8 +1131,13 @@ priv_mac_addr_del(struct priv *priv, unsigned int mac_index)
 	assert(mac_index < elemof(priv->mac));
 	if (!BITFIELD_ISSET(priv->mac_configured, mac_index))
 		return;
+	if (priv->rss) {
+		rxq_mac_addr_del(&priv->rxq_parent, mac_index);
+		goto end;
+	}
 	for (i = 0; (i != priv->rxqs_n); ++i)
 		rxq_mac_addr_del(&(*priv->rxqs)[i], mac_index);
+end:
 	BITFIELD_RESET(priv->mac_configured, mac_index);
 }
 
@@ -1126,6 +1177,12 @@ priv_mac_addr_add(struct priv *priv, unsigned int mac_index,
 			assert(!BITFIELD_ISSET
 			       ((*priv->rxqs)[i].mac_configured, mac_index));
 #endif
+		goto end;
+	}
+	if (priv->rss) {
+		ret = rxq_mac_addr_add(&priv->rxq_parent, mac_index);
+		if (ret)
+			return ret;
 		goto end;
 	}
 	for (i = 0; (i != priv->rxqs_n); ++i) {
@@ -1327,12 +1384,11 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 }
 
 static int
-mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
-		    unsigned int socket, const struct rte_eth_rxconf *conf,
-		    struct rte_mempool *mp)
+rxq_setup(struct rte_eth_dev *dev, struct rxq *rxq, uint16_t desc,
+	  unsigned int socket, const struct rte_eth_rxconf *conf,
+	  struct rte_mempool *mp)
 {
 	struct priv *priv = dev->data->dev_private;
-	struct rxq *rxq = &(*priv->rxqs)[idx];
 	struct rxq tmpl = {
 		.priv = priv,
 		.mp = mp
@@ -1343,22 +1399,27 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	} attr;
 	struct ibv_recv_wr *bad_wr;
 	int ret = 0;
+	int parent = (rxq == &priv->rxq_parent);
 
 	(void)socket; /* CPU socket for DMA allocation (ignored). */
 	(void)conf; /* Thresholds configuration (ignored). */
-	DEBUG("%p: configuring queue %u for %u descriptors",
-	      (void *)dev, idx, desc);
+	/*
+	 * If this is a parent queue, hardware must support RSS and
+	 * RSS must be enabled.
+	 */
+	assert((!parent) || ((priv->hw_rss) && (priv->rss)));
+	if (parent) {
+		/* Even if unused, ibv_create_cq() requires at least one
+		 * descriptor. */
+		desc = 1;
+		goto skip_mr;
+	}
 	if ((desc == 0) || (desc % MLX4_PMD_SGE_WR_N)) {
 		DEBUG("%p: invalid number of RX descriptors (must be a"
 		      " multiple of %d)", (void *)dev, desc);
 		return -EINVAL;
 	}
 	desc /= MLX4_PMD_SGE_WR_N;
-	if (idx >= priv->rxqs_n) {
-		DEBUG("%p: queue index out of range (%u >= %u)",
-		      (void *)dev, idx, priv->rxqs_n);
-		return -EOVERFLOW;
-	}
 	/* Get mempool size. */
 	tmpl.mp_size = mp_total_size(mp);
 	/* Use the entire RX mempool as the memory region. */
@@ -1371,6 +1432,7 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		      (void *)dev, strerror(ret));
 		goto error;
 	}
+skip_mr:
 	tmpl.cq = ibv_create_cq(priv->ctx, desc, NULL, NULL, 0);
 	if (tmpl.cq == NULL) {
 		ret = ENOMEM;
@@ -1400,9 +1462,28 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		},
 		.qp_type = IBV_QPT_RAW_PACKET
 	};
+	if (parent) {
+		attr.init.qpg_type = IBV_QPG_PARENT;
+		/* TSS isn't necessary. */
+		attr.init.parent_attrib.tss_child_count = 0;
+		attr.init.parent_attrib.rss_child_count = priv->rxqs_n;
+		DEBUG("initializing parent RSS queue");
+	}
+	else if (priv->rss) {
+		/* Make it a RSS queue. */
+		attr.init.qpg_type = IBV_QPG_CHILD_RX;
+		assert(priv->rxq_parent.qp != NULL);
+		attr.init.qpg_parent = priv->rxq_parent.qp;
+		DEBUG("initializing child RSS queue");
+	}
+	else {
+		attr.init.qpg_type = IBV_QPG_NONE;
+		attr.init.qpg_parent = NULL;
+		DEBUG("initializing queue without RSS");
+	}
 	tmpl.qp = ibv_create_qp(priv->pd, &attr.init);
 	if (tmpl.qp == NULL) {
-		ret = ENOMEM;
+		ret = errno;
 		DEBUG("%p: QP creation failure: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
@@ -1414,17 +1495,24 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		.port_num = priv->port
 	};
 	if ((ret = ibv_modify_qp(tmpl.qp, &attr.mod,
-				 (IBV_QP_STATE | IBV_QP_PORT)))) {
+				 (IBV_QP_STATE |
+				  IBV_QP_PORT |
+				  (parent ? IBV_QP_GROUP_RSS : 0))))) {
 		DEBUG("%p: QP state to IBV_QPS_INIT failed: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
 	}
-	/* Configure MAC and broadcast addresses. */
-	if ((ret = rxq_mac_addrs_add(&tmpl))) {
-		DEBUG("%p: QP flow attachment failed: %s",
-		      (void *)dev, strerror(ret));
-		goto error;
+	if ((parent) || (!priv->rss))  {
+		/* Configure MAC and broadcast addresses. */
+		if ((ret = rxq_mac_addrs_add(&tmpl))) {
+			DEBUG("%p: QP flow attachment failed: %s",
+			      (void *)dev, strerror(ret));
+			goto error;
+		}
 	}
+	/* Allocate descriptors for RX queues, except for the RSS parent. */
+	if (parent)
+		goto skip_alloc;
 	if ((ret = rxq_alloc_elts(&tmpl, desc))) {
 		DEBUG("%p: RXQ allocation failed: %s",
 		      (void *)dev, strerror(ret));
@@ -1437,6 +1525,7 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		      strerror(ret));
 		goto error;
 	}
+skip_alloc:
 	attr.mod = (struct ibv_qp_attr){
 		.qp_state = IBV_QPS_RTR
 	};
@@ -1462,6 +1551,24 @@ error:
 	return -ret; /* Negative errno value. */
 }
 
+static int
+mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
+		    unsigned int socket, const struct rte_eth_rxconf *conf,
+		    struct rte_mempool *mp)
+{
+	struct priv *priv = dev->data->dev_private;
+	struct rxq *rxq = &(*priv->rxqs)[idx];
+
+	DEBUG("%p: configuring queue %u for %u descriptors",
+	      (void *)dev, idx, desc);
+	if (idx >= priv->rxqs_n) {
+		DEBUG("%p: queue index out of range (%u >= %u)",
+		      (void *)dev, idx, priv->rxqs_n);
+		return -EOVERFLOW;
+	}
+	return rxq_setup(dev, rxq, desc, socket, conf, mp);
+}
+
 /* Simulate device start by attaching all configured flows. */
 static int
 mlx4_dev_start(struct rte_eth_dev *dev)
@@ -1473,6 +1580,16 @@ mlx4_dev_start(struct rte_eth_dev *dev)
 		return 0;
 	DEBUG("%p: attaching configured flows to all RX queues", (void *)dev);
 	priv->started = 1;
+	if (priv->rss) {
+		int ret = rxq_mac_addrs_add(&priv->rxq_parent);
+
+		if (ret == 0)
+			return 0;
+		DEBUG("%p: QP flow attachment failed: %s",
+		      (void *)dev, strerror(ret));
+		priv->started = 0;
+		return -1;
+	}
 	for (i = 0; (i != priv->rxqs_n); ++i) {
 		int ret = rxq_mac_addrs_add(&(*priv->rxqs)[i]);
 
@@ -1500,6 +1617,10 @@ mlx4_dev_stop(struct rte_eth_dev *dev)
 		return;
 	DEBUG("%p: detaching flows from all RX queues", (void *)dev);
 	priv->started = 0;
+	if (priv->rss) {
+		rxq_mac_addrs_del(&priv->rxq_parent);
+		return;
+	}
 	for (i = 0; (i != priv->rxqs_n); ++i)
 		rxq_mac_addrs_del(&(*priv->rxqs)[i]);
 }
@@ -1554,6 +1675,8 @@ mlx4_dev_close(struct rte_eth_dev *dev)
 			txq_cleanup(&(*priv->txqs)[i]);
 		free(priv->txqs);
 	}
+	if (priv->rss)
+		rxq_cleanup(&priv->rxq_parent);
 	assert(priv->pd != NULL);
 	claim_zero(ibv_dealloc_pd(priv->pd));
 	claim_zero(ibv_close_device(priv->ctx));
@@ -1877,24 +2000,38 @@ mlx4_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 		 * Filter is disabled, enable it.
 		 * Rehashing flows in all RX queues is necessary.
 		 */
-		for (i = 0; (i != priv->rxqs_n); ++i)
-			rxq_mac_addrs_del(&(*priv->rxqs)[i]);
-		priv->vlan_filter[j].enabled = 1;
-		if (priv->started)
+		if (priv->rss)
+			rxq_mac_addrs_del(&priv->rxq_parent);
+		else
 			for (i = 0; (i != priv->rxqs_n); ++i)
-				rxq_mac_addrs_add(&(*priv->rxqs)[i]);
+				rxq_mac_addrs_del(&(*priv->rxqs)[i]);
+		priv->vlan_filter[j].enabled = 1;
+		if (priv->started) {
+			if (priv->rss)
+				rxq_mac_addrs_add(&priv->rxq_parent);
+			else
+				for (i = 0; (i != priv->rxqs_n); ++i)
+					rxq_mac_addrs_add(&(*priv->rxqs)[i]);
+		}
 	}
 	else if ((!on) && (priv->vlan_filter[j].enabled)) {
 		/*
 		 * Filter is enabled, disable it.
 		 * Rehashing flows in all RX queues is necessary.
 		 */
-		for (i = 0; (i != priv->rxqs_n); ++i)
-			rxq_mac_addrs_del(&(*priv->rxqs)[i]);
-		priv->vlan_filter[j].enabled = 0;
-		if (priv->started)
+		if (priv->rss)
+			rxq_mac_addrs_del(&priv->rxq_parent);
+		else
 			for (i = 0; (i != priv->rxqs_n); ++i)
-				rxq_mac_addrs_add(&(*priv->rxqs)[i]);
+				rxq_mac_addrs_del(&(*priv->rxqs)[i]);
+		priv->vlan_filter[j].enabled = 0;
+		if (priv->started) {
+			if (priv->rss)
+				rxq_mac_addrs_add(&priv->rxq_parent);
+			else
+				for (i = 0; (i != priv->rxqs_n); ++i)
+					rxq_mac_addrs_add(&(*priv->rxqs)[i]);
+		}
 	}
 }
 
@@ -2142,6 +2279,16 @@ mlx4_dev_init(struct eth_driver *drv, struct rte_eth_dev *dev)
 	priv->port = port;
 	priv->pd = pd;
 	priv->mtu = 1500; /* Unused MTU. */
+	priv->hw_qpg = !!(device_attr.device_cap_flags & IBV_DEVICE_QPG);
+	priv->hw_tss = !!(device_attr.device_cap_flags & IBV_DEVICE_UD_TSS);
+	priv->hw_rss = !!(device_attr.device_cap_flags & IBV_DEVICE_UD_RSS);
+	DEBUG("device flags: %s%s%s",
+	      (priv->hw_qpg ? "IBV_DEVICE_QPG " : ""),
+	      (priv->hw_tss ? "IBV_DEVICE_TSS " : ""),
+	      (priv->hw_rss ? "IBV_DEVICE_RSS " : ""));
+	if (priv->hw_rss)
+		DEBUG("maximum RSS indirection table size: %u",
+		      device_attr.max_rss_tbl_sz);
 	guid_to_mac(&priv->mac[0].addr_bytes, priv->device_attr.node_guid);
 	BITFIELD_SET(priv->mac_configured, 0);
 	/* Update MAC address according to port number. */
