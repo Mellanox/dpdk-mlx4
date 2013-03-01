@@ -48,6 +48,11 @@
 /* Verbs header. */
 #include <infiniband/verbs.h>
 
+/* Force this to 0 for libibverbs versions lacking RSS support. */
+#ifndef RSS_SUPPORT
+#define RSS_SUPPORT 1
+#endif
+
 /* PMD header. */
 #include "mlx4.h"
 
@@ -1462,6 +1467,7 @@ skip_mr:
 		},
 		.qp_type = IBV_QPT_RAW_PACKET
 	};
+#if RSS_SUPPORT
 	if (parent) {
 		attr.init.qpg_type = IBV_QPG_PARENT;
 		/* TSS isn't necessary. */
@@ -1481,6 +1487,7 @@ skip_mr:
 		attr.init.qpg_parent = NULL;
 		DEBUG("initializing queue without RSS");
 	}
+#endif /* RSS_SUPPORT */
 	tmpl.qp = ibv_create_qp(priv->pd, &attr.init);
 	if (tmpl.qp == NULL) {
 		ret = errno;
@@ -1496,8 +1503,10 @@ skip_mr:
 	};
 	if ((ret = ibv_modify_qp(tmpl.qp, &attr.mod,
 				 (IBV_QP_STATE |
-				  IBV_QP_PORT |
-				  (parent ? IBV_QP_GROUP_RSS : 0))))) {
+#if RSS_SUPPORT
+				  (parent ? IBV_QP_GROUP_RSS : 0) |
+#endif /* RSS_SUPPORT */
+				  IBV_QP_PORT)))) {
 		DEBUG("%p: QP state to IBV_QPS_INIT failed: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
@@ -2279,6 +2288,7 @@ mlx4_dev_init(struct eth_driver *drv, struct rte_eth_dev *dev)
 	priv->port = port;
 	priv->pd = pd;
 	priv->mtu = 1500; /* Unused MTU. */
+#if RSS_SUPPORT
 	priv->hw_qpg = !!(device_attr.device_cap_flags & IBV_DEVICE_QPG);
 	priv->hw_tss = !!(device_attr.device_cap_flags & IBV_DEVICE_UD_TSS);
 	priv->hw_rss = !!(device_attr.device_cap_flags & IBV_DEVICE_UD_RSS);
@@ -2289,6 +2299,7 @@ mlx4_dev_init(struct eth_driver *drv, struct rte_eth_dev *dev)
 	if (priv->hw_rss)
 		DEBUG("maximum RSS indirection table size: %u",
 		      device_attr.max_rss_tbl_sz);
+#endif /* RSS_SUPPORT */
 	guid_to_mac(&priv->mac[0].addr_bytes, priv->device_attr.node_guid);
 	BITFIELD_SET(priv->mac_configured, 0);
 	/* Update MAC address according to port number. */
