@@ -2155,22 +2155,25 @@ guid_to_mac(uint8_t (*mac)[ETHER_ADDR_LEN], uint64_t guid)
 
 /* Support up to 32 adapters. */
 static struct {
-	struct rte_eth_dev *dev; /* associated PCI device */
+	struct rte_pci_addr pci_addr; /* associated PCI address */
 	uint32_t ports; /* physical ports bitfield. */
 } mlx4_dev[32];
 
 /* Return mlx4_dev[] index, or -1 on error. */
 static int
-mlx4_dev_idx(struct rte_eth_dev *dev)
+mlx4_dev_idx(struct rte_pci_addr *pci_addr)
 {
 	unsigned int i;
 	int ret = -1;
 
-	assert(dev != NULL);
+	assert(pci_addr != NULL);
 	for (i = 0; (i != elemof(mlx4_dev)); ++i) {
-		if (mlx4_dev[i].dev == dev)
+		if ((mlx4_dev[i].pci_addr.domain == pci_addr->domain) &&
+		    (mlx4_dev[i].pci_addr.bus == pci_addr->bus) &&
+		    (mlx4_dev[i].pci_addr.devid == pci_addr->devid) &&
+		    (mlx4_dev[i].pci_addr.function == pci_addr->function))
 			return i;
-		if ((mlx4_dev[i].dev == NULL) && (ret == -1))
+		if ((mlx4_dev[i].ports == 0) && (ret == -1))
 			ret = i;
 	}
 	return ret;
@@ -2195,7 +2198,7 @@ mlx4_dev_init(struct eth_driver *drv, struct rte_eth_dev *dev)
 
 	assert(drv == &mlx4_driver);
 	/* Get mlx4_dev[] index. */
-	idx = mlx4_dev_idx(dev);
+	idx = mlx4_dev_idx(&dev->pci_dev->addr);
 	if (idx == -1) {
 		DEBUG("this driver cannot support any more adapters");
 		return -ENOMEM;
@@ -2218,6 +2221,8 @@ mlx4_dev_init(struct eth_driver *drv, struct rte_eth_dev *dev)
 	if (mlx4_dev[idx].ports & test)
 		return -ENODEV;
 #endif /* RTE_PCI_DRV_MULTIPLE */
+	/* Save PCI address. */
+	mlx4_dev[idx].pci_addr = dev->pci_dev->addr;
 	list = ibv_get_device_list(&i);
 	if (list == NULL) {
 		assert(errno);
