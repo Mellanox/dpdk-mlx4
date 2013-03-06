@@ -16,13 +16,12 @@ DPDK Poll-Mode Driver (PMD) for Mellanox ConnectX-3 Ethernet adapters.
 This driver is based on ``libibverbs`` and currently supports:
 
 - Scattering/gathering RX/TX packets.
-- Multiple RX and TX queues.
+- Multiple RX (with RSS/RCA) and TX queues.
 - Multiple MAC addresses.
 - VLAN filtering.
 - Link state information.
 - Software counters/statistics.
 - Start/stop/close operations.
-- Increasing the number of RX/TX queues at runtime.
 - Multiple physical ports host adapter (requires a DPDK patch).
     
 Unsupported features:
@@ -30,8 +29,9 @@ Unsupported features:
 - Promiscuous mode.
 - Broadcast frames (only partially supported).
 - VLAN filtering doesn't work (not interpreted in kernel driver).
-- RSS/RCA isn't implemented.
 - Hardware counters.
+- RSS hash key and options cannot be modified.
+- Increasing the number of RX/TX queues at runtime (not safe with DPDK 1.2).
 
 It can be compiled either internally or externally to the DPDK.
 
