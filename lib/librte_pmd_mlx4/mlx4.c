@@ -46,7 +46,14 @@
 #endif
 
 /* Verbs header. */
+/* ISO C doesn't support unnamed structs/unions, disabling -pedantic. */
+#ifdef PEDANTIC
+#pragma GCC diagnostic ignored "-pedantic"
+#endif
 #include <infiniband/verbs.h>
+#ifdef PEDANTIC
+#pragma GCC diagnostic error "-pedantic"
+#endif
 
 /* Force this to 0 for libibverbs versions lacking RSS support. */
 #ifndef RSS_SUPPORT
