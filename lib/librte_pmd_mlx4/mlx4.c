@@ -281,6 +281,15 @@ dev_configure(struct rte_eth_dev *dev)
 	return ret;
 }
 
+#if BUILT_DPDK_VERSION >= DPDK_VERSION(1, 3, 0)
+
+static int
+mlx4_dev_configure(struct rte_eth_dev *dev)
+{
+	return dev_configure(dev);
+}
+
+#else /* BUILT_DPDK_VERSION */
 
 static int
 mlx4_dev_configure(struct rte_eth_dev *dev, uint16_t rxqs_n, uint16_t txqs_n)
@@ -316,6 +325,8 @@ mlx4_dev_configure(struct rte_eth_dev *dev, uint16_t rxqs_n, uint16_t txqs_n)
 	dev->data->tx_queues = (dpdk_txq_t **)txqs;
 	return dev_configure(dev);
 }
+
+#endif /* BUILT_DPDK_VERSION */
 
 /* TX queues handling. */
 
@@ -872,6 +883,27 @@ mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	}
 	return ret;
 }
+
+#if BUILT_DPDK_VERSION >= DPDK_VERSION(1, 3, 0)
+
+static void
+mlx4_tx_queue_release(dpdk_txq_t *dpdk_txq)
+{
+	struct txq *txq = (struct txq *)dpdk_txq;
+	struct priv *priv = txq->priv;
+	unsigned int i;
+
+	for (i = 0; (i != priv->txqs_n); ++i)
+		if ((*priv->txqs)[i] == txq) {
+			DEBUG("%p: removing TX queue %p from list",
+			      (void *)priv->dev, (void *)txq);
+			(*priv->txqs)[i] = NULL;
+			break;
+		}
+	txq_cleanup(txq);
+}
+
+#endif /* BUILT_DPDKP_VERSION */
 
 /* RX queues handling. */
 
@@ -1638,6 +1670,27 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	return ret;
 }
 
+#if BUILT_DPDK_VERSION >= DPDK_VERSION(1, 3, 0)
+
+static void
+mlx4_rx_queue_release(dpdk_rxq_t *dpdk_rxq)
+{
+	struct rxq *rxq = (struct rxq *)dpdk_rxq;
+	struct priv *priv = rxq->priv;
+	unsigned int i;
+
+	for (i = 0; (i != priv->rxqs_n); ++i)
+		if ((*priv->rxqs)[i] == rxq) {
+			DEBUG("%p: removing RX queue %p from list",
+			      (void *)priv->dev, (void *)rxq);
+			(*priv->rxqs)[i] = NULL;
+			break;
+		}
+	rxq_cleanup(rxq);
+}
+
+#endif /* BUILT_DPDK_VERSION */
+
 /* Simulate device start by attaching all configured flows. */
 static int
 mlx4_dev_start(struct rte_eth_dev *dev)
@@ -1694,8 +1747,13 @@ mlx4_dev_stop(struct rte_eth_dev *dev)
 		rxq_mac_addrs_del((*priv->rxqs)[i]);
 }
 
-/* See mlx4_dev_infos_get() and mlx4_dev_close(). */
+#if BUILT_DPDK_VERSION < DPDK_VERSION(1, 3, 0)
+
+/* See mlx4_dev_infos_get() and mlx4_dev_close().
+ * DPDK 1.2 leaves queues allocation and management to the PMD. */
 static void *removed_queue[512];
+
+#endif /* BUILT_DPDK_VERSION */
 
 static uint16_t
 removed_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
@@ -1724,38 +1782,52 @@ mlx4_dev_close(struct rte_eth_dev *dev)
 
 	DEBUG("%p: closing device \"%s\"",
 	      (void *)dev, priv->ctx->device->name);
-	/* Prevent crashes when queues are still in use. */
+	/* Prevent crashes when queues are still in use. This is unfortunately
+	 * still required for DPDK 1.3 because some programs (such as testpmd)
+	 * never release them before closing the device. */
 	dev->rx_pkt_burst = removed_rx_burst;
 	dev->tx_pkt_burst = removed_tx_burst;
 	if (priv->rxqs != NULL) {
 		/* XXX race condition if mlx4_rx_burst() is still running. */
 		usleep(1000);
+#if BUILT_DPDK_VERSION < DPDK_VERSION(1, 3, 0)
 		dev->data->nb_rx_queues = 0;
 		dev->data->rx_queues = (void *)removed_queue;
+#endif /* BUILT_DPDK_VERSION */
 		for (i = 0; (i != priv->rxqs_n); ++i) {
 			tmp = (*priv->rxqs)[i];
 			(*priv->rxqs)[i] = NULL;
 			rxq_cleanup(tmp);
 		}
 		priv->rxqs_n = 0;
+#if BUILT_DPDK_VERSION < DPDK_VERSION(1, 3, 0)
 		tmp = priv->rxqs;
 		priv->rxqs = NULL;
 		free(tmp);
+#else /* BUILT_DPDK_VERSION */
+		priv->rxqs = NULL;
+#endif /* BUILT_DPDK_VERSION */
 	}
 	if (priv->txqs != NULL) {
 		/* XXX race condition if mlx4_tx_burst() is still running. */
 		usleep(1000);
+#if BUILT_DPDK_VERSION < DPDK_VERSION(1, 3, 0)
 		dev->data->nb_tx_queues = 0;
 		dev->data->tx_queues = (void *)removed_queue;
+#endif /* BUILT_DPDK_VERSION */
 		for (i = 0; (i != priv->txqs_n); ++i) {
 			tmp = (*priv->txqs)[i];
 			(*priv->txqs)[i] = NULL;
 			txq_cleanup(tmp);
 		}
 		priv->txqs_n = 0;
+#if BUILT_DPDK_VERSION < DPDK_VERSION(1, 3, 0)
 		tmp = priv->txqs;
 		priv->txqs = NULL;
 		free(tmp);
+#else /* BUILT_DPDK_VERSION */
+		priv->txqs = NULL;
+#endif /* BUILT_DPDK_VERSION */
 	}
 	if (priv->rss)
 		rxq_cleanup(&priv->rxq_parent);
@@ -1780,11 +1852,13 @@ mlx4_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *info)
 	 */
 	max = ((priv->device_attr.max_cq > priv->device_attr.max_qp) ?
 	       priv->device_attr.max_qp : priv->device_attr.max_cq);
+#if BUILT_DPDK_VERSION < DPDK_VERSION(1, 3, 0)
 	/*
 	 * The number of dummy queue pointers available to replace them
 	 * during mlx4_dev_close() also limit this value.
 	 */
 	max = ((max > elemof(removed_queue)) ? elemof(removed_queue) : max);
+#endif /* BUILT_DPDK_VERSION */
 	info->max_rx_queues = max;
 	info->max_tx_queues = max;
 	info->max_mac_addrs = elemof(priv->mac);
@@ -2048,8 +2122,8 @@ mlx4_dev_control(struct rte_eth_dev *dev, uint32_t command, void *arg)
 
 #endif /* DPDK_6WIND */
 
-static void
-mlx4_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
+static int
+vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 {
 	struct priv *priv = dev->data->dev_private;
 	unsigned int i;
@@ -2071,7 +2145,7 @@ mlx4_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 	}
 	/* Check if there's room for another VLAN filter. */
 	if (j == (unsigned int)-1)
-		return;
+		return -ENOMEM;
 	/*
 	 * VLAN filters apply to all configured MAC addresses, flow
 	 * specifications must be reconfigured accordingly.
@@ -2115,7 +2189,26 @@ mlx4_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 					rxq_mac_addrs_add((*priv->rxqs)[i]);
 		}
 	}
+	return 0;
 }
+
+#if BUILT_DPDK_VERSION < DPDK_VERSION(1, 3, 0)
+
+static void
+mlx4_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
+{
+	vlan_filter_set(dev, vlan_id, on);
+}
+
+#else /* BUILT_DPDK_VERSION */
+
+static int
+mlx4_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
+{
+	return vlan_filter_set(dev, vlan_id, on);
+}
+
+#endif /* BUILT_DPDK_VERSION */
 
 static struct eth_dev_ops mlx4_dev_ops = {
 	.dev_configure = mlx4_dev_configure,
@@ -2135,13 +2228,28 @@ static struct eth_dev_ops mlx4_dev_ops = {
 	.rxq_stats_reset = mlx4_rxq_stats_reset,
 	.txq_stats_reset = mlx4_txq_stats_reset,
 #endif /* DPDK_6WIND */
+#if BUILT_DPDK_VERSION >= DPDK_VERSION(1, 3, 0)
+	.queue_stats_mapping_set = NULL,
+#endif /* BUILT_DPDK_VERSION */
 	.dev_infos_get = mlx4_dev_infos_get,
 	.vlan_filter_set = mlx4_vlan_filter_set,
+#if BUILT_DPDK_VERSION >= DPDK_VERSION(1, 3, 0)
+	.vlan_tpid_set = NULL,
+	.vlan_strip_queue_set = NULL,
+	.vlan_offload_set = NULL,
+#endif /* BUILT_DPDK_VERSION */
 	.rx_queue_setup = mlx4_rx_queue_setup,
 	.tx_queue_setup = mlx4_tx_queue_setup,
+#if BUILT_DPDK_VERSION >= DPDK_VERSION(1, 3, 0)
+	.rx_queue_release = mlx4_rx_queue_release,
+	.tx_queue_release = mlx4_tx_queue_release,
+#endif /* BUILT_DPDK_VERSION */
 	.dev_led_on = NULL,
 	.dev_led_off = NULL,
 	.flow_ctrl_set = NULL,
+#if BUILT_DPDK_VERSION >= DPDK_VERSION(1, 3, 0)
+	.priority_flow_ctrl_set = NULL,
+#endif /* BUILT_DPDK_VERSION */
 	.mac_addr_remove = mlx4_mac_addr_remove,
 	.mac_addr_add = mlx4_mac_addr_add,
 #ifdef DPDK_6WIND
