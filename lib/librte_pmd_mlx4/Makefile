@@ -54,9 +54,9 @@ endif
 LDFLAGS += -shared
 LDFLAGS += -libverbs
 
-all: $(OUT)
+all: warn $(OUT)
 
-$(OBJ): warn $(SRC) $(HDR)
+$(OBJ): $(SRC) $(HDR)
 
 $(OUT): $(OBJ)
 	$(CC) $(LDFLAGS) -o $(OUT) $(OBJ)
