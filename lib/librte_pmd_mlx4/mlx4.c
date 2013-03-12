@@ -209,16 +209,10 @@ struct priv {
 	unsigned int rss:1; /* RSS is enabled. */
 	/* RX/TX queues. */
 	struct rxq rxq_parent; /* Parent queue when RSS is enabled. */
-	unsigned int rxqs_n; /* Number of RX queues. */
-	unsigned int txqs_n; /* Number of TX queues. */
-	struct rxq (*rxqs)[]; /* RX queues. */
-	struct txq (*txqs)[]; /* TX queues. */
-	/*
-	 * Pointers to the above elements, for IGB compatibility.
-	 * DPDK requires this for burst() functions.
-	 */
-	struct dpdk_rxq_t **dpdk_rxqs;
-	struct dpdk_txq_t **dpdk_txqs;
+	unsigned int rxqs_n; /* RX queues array size. */
+	unsigned int txqs_n; /* TX queues array size. */
+	struct rxq *(*rxqs)[]; /* RX queues. */
+	struct txq *(*txqs)[]; /* TX queues. */
 };
 
 /* Device configuration. */
@@ -228,87 +222,99 @@ rxq_setup(struct rte_eth_dev *dev, struct rxq *rxq, uint16_t desc,
 	  unsigned int socket, const struct rte_eth_rxconf *conf,
 	  struct rte_mempool *mp);
 
+static void
+rxq_cleanup(struct rxq *rxq);
+
+static int
+dev_configure(struct rte_eth_dev *dev)
+{
+	struct priv *priv = dev->data->dev_private;
+	unsigned int rxqs_n = dev->data->nb_rx_queues;
+	unsigned int txqs_n = dev->data->nb_tx_queues;
+	unsigned int tmp;
+	int ret;
+
+	priv->rxqs = (void *)dev->data->rx_queues;
+	priv->txqs = (void *)dev->data->tx_queues;
+	if (txqs_n != priv->txqs_n) {
+		DEBUG("%p: TX queues number update: %u -> %u",
+		      (void *)dev, priv->txqs_n, txqs_n);
+		priv->txqs_n = txqs_n;
+	}
+	if (rxqs_n == priv->rxqs_n)
+		return 0;
+	DEBUG("%p: RX queues number update: %u -> %u",
+	      (void *)dev, priv->rxqs_n, rxqs_n);
+	/* If RSS is enabled, disable it first. */
+	if (priv->rss) {
+		unsigned int i;
+
+		/* Only if there are no remaining child RX queues. */
+		for (i = 0; (i != priv->rxqs_n); ++i)
+			if ((*priv->rxqs)[i] != NULL)
+				return -EINVAL;
+		rxq_cleanup(&priv->rxq_parent);
+		priv->rss = 0;
+		priv->rxqs_n = 0;
+	}
+	if (rxqs_n <= 1) {
+		/* Nothing else to do. */
+		priv->rxqs_n = rxqs_n;
+		return 0;
+	}
+	/* Allocate a new RSS parent queue if supported by hardware. */
+	if (!priv->hw_rss) {
+		DEBUG("%p: only a single RX queue can be configured when"
+		      " hardware doesn't support RSS",
+		      (void *)dev);
+		return -EINVAL;
+	}
+	priv->rss = 1;
+	tmp = priv->rxqs_n;
+	priv->rxqs_n = rxqs_n;
+	ret = rxq_setup(dev, &priv->rxq_parent, 0, 0, NULL, NULL);
+	if (!ret)
+		return 0;
+	/* Failure, rollback. */
+	priv->rss = 0;
+	priv->rxqs_n = tmp;
+	return ret;
+}
+
+
 static int
 mlx4_dev_configure(struct rte_eth_dev *dev, uint16_t rxqs_n, uint16_t txqs_n)
 {
 	struct priv *priv = dev->data->dev_private;
-	struct rxq (*rxqs)[rxqs_n];
-	struct txq (*txqs)[txqs_n];
-	struct dpdk_rxq_t *(*dpdk_rxqs)[rxqs_n];
-	struct dpdk_txq_t *(*dpdk_txqs)[txqs_n];
-	int alloc_rss_parent = 0;
+	struct rxq *(*rxqs)[rxqs_n] = NULL;
+	struct txq *(*txqs)[txqs_n] = NULL;
 
-	if ((rxqs_n < priv->rxqs_n) || (txqs_n < priv->txqs_n)) {
-		DEBUG("lowering the number of RX or TX queues is unsupported");
-		return -EINVAL;
+	if ((rxqs_n == priv->rxqs_n) && (txqs_n == priv->txqs_n))
+		return 0;
+	/* Changing the number of RX or TX queues with DPDK < 1.3.0 is
+	 * unsafe, thus not supported. */
+	if ((priv->rxqs_n) || (priv->txqs_n)) {
+		DEBUG("%p: changing the number of RX or TX queues is"
+		      " not supported",
+		      (void *)dev);
+		return -EEXIST;
 	}
-	if (rxqs_n != priv->rxqs_n) {
-		/* Extra work when the number of RX queues is changed. */
-		if (priv->rss) {
-			/* XXX unsupported when RSS is already enabled,
-			 * not safe with DPDK 1.2. */
-			return -ENOMEM;
-		}
-		if ((!priv->hw_rss) || (rxqs_n == 1)) {
-			if (rxqs_n != 1) {
-				DEBUG("only a single RX queue can be"
-				      " configured when hardware doesn't"
-				      " support RSS");
-				return -EINVAL;
-			}
-		}
-		else {
-			assert(rxqs_n > 1);
-			assert(priv->hw_rss);
-			/* Enable RSS. */
-			alloc_rss_parent = 1;
-		}
-	}
-	if (((rxqs = realloc(priv->rxqs, (sizeof(*rxqs) +
-					  sizeof(*dpdk_rxqs)))) == NULL) ||
-	    (priv->rxqs = rxqs,
-	     ((txqs = realloc(priv->txqs, (sizeof(*txqs) +
-					   sizeof(*dpdk_txqs)))) == NULL))) {
-		DEBUG("unable to allocate RX or TX queues descriptors: %s",
-		      strerror(errno));
+	assert(priv->rxqs == NULL);
+	assert(priv->txqs == NULL);
+	/* Allocate arrays. */
+	if (((rxqs = calloc(1, sizeof(*rxqs))) == NULL) ||
+	    ((txqs = calloc(1, sizeof(*txqs))) == NULL)) {
+		DEBUG("%p: unable to allocate RX or TX queues descriptors: %s",
+		      (void *)dev, strerror(errno));
+		free(rxqs);
+		free(txqs);
 		return -errno;
 	}
-	/* Save queues. */
-	priv->txqs = txqs;
-	memset(&(*rxqs)[priv->rxqs_n], 0,
-	       (sizeof((*rxqs)[0]) * (rxqs_n - priv->rxqs_n)));
-	priv->rxqs_n = rxqs_n;
-	memset(&(*txqs)[priv->txqs_n], 0,
-	       (sizeof((*txqs)[0]) * (txqs_n - priv->txqs_n)));
-	priv->txqs_n = txqs_n;
-	/*
-	 * Copy this information to dev. We use the extra space allocated
-	 * at the end of (*rxqs)[] and (*txqs)[] to store an array of pointers
-	 * to their elements (*(*dpdk_rxqs)[] and *(*dpdk_txqs)[]). The DPDK
-	 * will use them for the *burst() functions.
-	 */
-	dev->data->tx_queues = (dpdk_txq_t **)&(*txqs)[txqs_n];
-	dev->data->nb_tx_queues = txqs_n;
-	dev->data->rx_queues = (dpdk_rxq_t **)&(*rxqs)[rxqs_n];
 	dev->data->nb_rx_queues = rxqs_n;
-	while (txqs_n-- != 0)
-		dev->data->tx_queues[txqs_n] = (dpdk_txq_t *)&(*txqs)[txqs_n];
-	while (rxqs_n-- != 0)
-		dev->data->rx_queues[rxqs_n] = (dpdk_rxq_t *)&(*rxqs)[rxqs_n];
-	if (alloc_rss_parent) {
-		int ret;
-
-		priv->rss = 1;
-		ret = rxq_setup(dev, &priv->rxq_parent, 0, 0, NULL, NULL);
-		if (ret) {
-			/* Parent allocation failed, child queues can't be
-			 * configured. */
-			priv->rxqs_n = 0;
-			priv->rss = 0;
-			return ret;
-		}
-	}
-	return 0;
+	dev->data->rx_queues = (dpdk_rxq_t **)rxqs;
+	dev->data->nb_tx_queues = txqs_n;
+	dev->data->tx_queues = (dpdk_txq_t **)txqs;
+	return dev_configure(dev);
 }
 
 /* TX queues handling. */
@@ -725,11 +731,10 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 }
 
 static int
-mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
-		    unsigned int socket, const struct rte_eth_txconf *conf)
+txq_setup(struct rte_eth_dev *dev, struct txq *txq, uint16_t desc,
+	  unsigned int socket, const struct rte_eth_txconf *conf)
 {
 	struct priv *priv = dev->data->dev_private;
-	struct txq *txq = &(*priv->txqs)[idx];
 	struct txq tmpl = {
 		.priv = priv
 	};
@@ -741,19 +746,12 @@ mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 
 	(void)socket; /* CPU socket for DMA allocation (ignored). */
 	(void)conf; /* Thresholds configuration (ignored). */
-	DEBUG("%p: configuring queue %u for %u descriptors",
-	      (void *)dev, idx, desc);
 	if ((desc == 0) || (desc % MLX4_PMD_SGE_WR_N)) {
 		DEBUG("%p: invalid number of TX descriptors (must be a"
 		      " multiple of %d)", (void *)dev, desc);
 		return -EINVAL;
 	}
 	desc /= MLX4_PMD_SGE_WR_N;
-	if (idx >= priv->txqs_n) {
-		DEBUG("%p: queue index out of range (%u >= %u)",
-		      (void *)dev, idx, priv->txqs_n);
-		return -EOVERFLOW;
-	}
 	/* MRs will be registered in mp2mr[] later. */
 	tmpl.cq = ibv_create_cq(priv->ctx, desc, NULL, NULL, 0);
 	if (tmpl.cq == NULL) {
@@ -837,6 +835,42 @@ error:
 	txq_cleanup(&tmpl);
 	assert(ret != 0);
 	return -ret; /* Negative errno value. */
+}
+
+static int
+mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
+		    unsigned int socket, const struct rte_eth_txconf *conf)
+{
+	struct priv *priv = dev->data->dev_private;
+	struct txq *txq = (*priv->txqs)[idx];
+	int ret;
+
+	DEBUG("%p: configuring queue %u for %u descriptors",
+	      (void *)dev, idx, desc);
+	if (idx >= priv->txqs_n) {
+		DEBUG("%p: queue index out of range (%u >= %u)",
+		      (void *)dev, idx, priv->txqs_n);
+		return -EOVERFLOW;
+	}
+	if (txq != NULL) {
+		DEBUG("%p: queue index %u is already allocated (%p)",
+		      (void *)dev, idx, (void *)txq);
+		return -EEXIST;
+	}
+	if ((txq = calloc(1, sizeof(*txq))) == NULL) {
+		DEBUG("%p: unable to allocate queue index %u: %s",
+		      (void *)dev, idx, strerror(errno));
+		return -errno;
+	}
+	ret = txq_setup(dev, txq, desc, socket, conf);
+	if (ret)
+		free(txq);
+	else {
+		DEBUG("%p: adding TX queue %p to list",
+		      (void *)dev, (void *)txq);
+		(*priv->txqs)[idx] = txq;
+	}
+	return ret;
 }
 
 /* RX queues handling. */
@@ -1147,8 +1181,8 @@ priv_mac_addr_del(struct priv *priv, unsigned int mac_index)
 		rxq_mac_addr_del(&priv->rxq_parent, mac_index);
 		goto end;
 	}
-	for (i = 0; (i != priv->rxqs_n); ++i)
-		rxq_mac_addr_del(&(*priv->rxqs)[i], mac_index);
+	for (i = 0; (i != priv->dev->data->nb_rx_queues); ++i)
+		rxq_mac_addr_del((*priv->rxqs)[i], mac_index);
 end:
 	BITFIELD_RESET(priv->mac_configured, mac_index);
 }
@@ -1187,7 +1221,7 @@ priv_mac_addr_add(struct priv *priv, unsigned int mac_index,
 		/* Verify that all queues have this index disabled. */
 		for (i = 0; (i != priv->rxqs_n); ++i)
 			assert(!BITFIELD_ISSET
-			       ((*priv->rxqs)[i].mac_configured, mac_index));
+			       ((*priv->rxqs)[i]->mac_configured, mac_index));
 #endif
 		goto end;
 	}
@@ -1198,12 +1232,12 @@ priv_mac_addr_add(struct priv *priv, unsigned int mac_index,
 		goto end;
 	}
 	for (i = 0; (i != priv->rxqs_n); ++i) {
-		ret = rxq_mac_addr_add(&(*priv->rxqs)[i], mac_index);
+		ret = rxq_mac_addr_add((*priv->rxqs)[i], mac_index);
 		if (!ret)
 			continue;
 		/* Failure, rollback. */
 		while (i != 0)
-			rxq_mac_addr_del(&(*priv->rxqs)[(--i)], mac_index);
+			rxq_mac_addr_del((*priv->rxqs)[(--i)], mac_index);
 		return ret;
 	}
 end:
@@ -1573,7 +1607,8 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		    struct rte_mempool *mp)
 {
 	struct priv *priv = dev->data->dev_private;
-	struct rxq *rxq = &(*priv->rxqs)[idx];
+	struct rxq *rxq = (*priv->rxqs)[idx];
+	int ret;
 
 	DEBUG("%p: configuring queue %u for %u descriptors",
 	      (void *)dev, idx, desc);
@@ -1582,7 +1617,25 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		      (void *)dev, idx, priv->rxqs_n);
 		return -EOVERFLOW;
 	}
-	return rxq_setup(dev, rxq, desc, socket, conf, mp);
+	if (rxq != NULL) {
+		DEBUG("%p: queue index %u is already allocated (%p)",
+		      (void *)dev, idx, (void *)rxq);
+		return -EEXIST;
+	}
+	if ((rxq = calloc(1, sizeof(*rxq))) == NULL) {
+		DEBUG("%p: unable to allocate queue index %u: %s",
+		      (void *)dev, idx, strerror(errno));
+		return -errno;
+	}
+	ret = rxq_setup(dev, rxq, desc, socket, conf, mp);
+	if (ret)
+		free(rxq);
+	else {
+		DEBUG("%p: adding RX queue %p to list",
+		      (void *)dev, (void *)rxq);
+		(*priv->rxqs)[idx] = rxq;
+	}
+	return ret;
 }
 
 /* Simulate device start by attaching all configured flows. */
@@ -1607,7 +1660,7 @@ mlx4_dev_start(struct rte_eth_dev *dev)
 		return -1;
 	}
 	for (i = 0; (i != priv->rxqs_n); ++i) {
-		int ret = rxq_mac_addrs_add(&(*priv->rxqs)[i]);
+		int ret = rxq_mac_addrs_add((*priv->rxqs)[i]);
 
 		if (ret == 0)
 			continue;
@@ -1615,7 +1668,7 @@ mlx4_dev_start(struct rte_eth_dev *dev)
 		      (void *)dev, strerror(ret));
 		/* Rollback. */
 		while (i != 0)
-			rxq_mac_addrs_del(&(*priv->rxqs)[(--i)]);
+			rxq_mac_addrs_del((*priv->rxqs)[(--i)]);
 		priv->started = 0;
 		return -1;
 	}
@@ -1638,7 +1691,7 @@ mlx4_dev_stop(struct rte_eth_dev *dev)
 		return;
 	}
 	for (i = 0; (i != priv->rxqs_n); ++i)
-		rxq_mac_addrs_del(&(*priv->rxqs)[i]);
+		rxq_mac_addrs_del((*priv->rxqs)[i]);
 }
 
 /* See mlx4_dev_infos_get() and mlx4_dev_close(). */
@@ -1666,6 +1719,7 @@ static void
 mlx4_dev_close(struct rte_eth_dev *dev)
 {
 	struct priv *priv = dev->data->dev_private;
+	void *tmp;
 	unsigned int i;
 
 	DEBUG("%p: closing device \"%s\"",
@@ -1678,18 +1732,30 @@ mlx4_dev_close(struct rte_eth_dev *dev)
 		usleep(1000);
 		dev->data->nb_rx_queues = 0;
 		dev->data->rx_queues = (void *)removed_queue;
-		for (i = 0; (i != priv->rxqs_n); ++i)
-			rxq_cleanup(&(*priv->rxqs)[i]);
-		free(priv->rxqs);
+		for (i = 0; (i != priv->rxqs_n); ++i) {
+			tmp = (*priv->rxqs)[i];
+			(*priv->rxqs)[i] = NULL;
+			rxq_cleanup(tmp);
+		}
+		priv->rxqs_n = 0;
+		tmp = priv->rxqs;
+		priv->rxqs = NULL;
+		free(tmp);
 	}
 	if (priv->txqs != NULL) {
 		/* XXX race condition if mlx4_tx_burst() is still running. */
 		usleep(1000);
 		dev->data->nb_tx_queues = 0;
 		dev->data->tx_queues = (void *)removed_queue;
-		for (i = 0; (i != priv->txqs_n); ++i)
-			txq_cleanup(&(*priv->txqs)[i]);
-		free(priv->txqs);
+		for (i = 0; (i != priv->txqs_n); ++i) {
+			tmp = (*priv->txqs)[i];
+			(*priv->txqs)[i] = NULL;
+			txq_cleanup(tmp);
+		}
+		priv->txqs_n = 0;
+		tmp = priv->txqs;
+		priv->txqs = NULL;
+		free(tmp);
 	}
 	if (priv->rss)
 		rxq_cleanup(&priv->rxq_parent);
@@ -1733,15 +1799,15 @@ mlx4_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 
 	/* Add software counters. */
 	for (i = 0; (i != priv->rxqs_n); ++i) {
-		tmp.ipackets += (*priv->rxqs)[i].stats.ipackets;
-		tmp.ibytes += (*priv->rxqs)[i].stats.ibytes;
-		tmp.ierrors += (*priv->rxqs)[i].stats.idropped;
-		tmp.rx_nombuf += (*priv->rxqs)[i].stats.rx_nombuf;
+		tmp.ipackets += (*priv->rxqs)[i]->stats.ipackets;
+		tmp.ibytes += (*priv->rxqs)[i]->stats.ibytes;
+		tmp.ierrors += (*priv->rxqs)[i]->stats.idropped;
+		tmp.rx_nombuf += (*priv->rxqs)[i]->stats.rx_nombuf;
 	}
 	for (i = 0; (i != priv->txqs_n); ++i) {
-		tmp.opackets += (*priv->txqs)[i].stats.opackets;
-		tmp.obytes += (*priv->txqs)[i].stats.obytes;
-		tmp.oerrors += (*priv->txqs)[i].stats.odropped;
+		tmp.opackets += (*priv->txqs)[i]->stats.opackets;
+		tmp.obytes += (*priv->txqs)[i]->stats.obytes;
+		tmp.oerrors += (*priv->txqs)[i]->stats.odropped;
 	}
 #ifndef MLX4_PMD_SOFT_COUNTERS
 	/* FIXME: retrieve and add hardware counters. */
@@ -1756,10 +1822,10 @@ mlx4_stats_reset(struct rte_eth_dev *dev)
 	unsigned int i;
 
 	for (i = 0; (i != priv->rxqs_n); ++i)
-		(*priv->rxqs)[i].stats =
+		(*priv->rxqs)[i]->stats =
 			(struct rte_rxq_stats){ .ipackets = 0 };
 	for (i = 0; (i != priv->txqs_n); ++i)
-		(*priv->txqs)[i].stats =
+		(*priv->txqs)[i]->stats =
 			(struct rte_txq_stats){ .opackets = 0 };
 #ifndef MLX4_PMD_SOFT_COUNTERS
 	/* FIXME: reset hardware counters. */
@@ -1775,7 +1841,7 @@ mlx4_rxq_stats_get(struct rte_eth_dev *dev, uint16_t idx,
 	const struct priv *priv = dev->data->dev_private;
 
 	assert(idx < priv->rxqs_n);
-	*stats = (*priv->rxqs)[idx].stats;
+	*stats = (*priv->rxqs)[idx]->stats;
 #ifndef MLX4_PMD_SOFT_COUNTERS
 	/* FIXME: add hardware counters. */
 #endif
@@ -1788,7 +1854,7 @@ mlx4_txq_stats_get(struct rte_eth_dev *dev, uint16_t idx,
 	const struct priv *priv = dev->data->dev_private;
 
 	assert(idx < priv->txqs_n);
-	*stats = (*priv->txqs)[idx].stats;
+	*stats = (*priv->txqs)[idx]->stats;
 #ifndef MLX4_PMD_SOFT_COUNTERS
 	/* FIXME: add hardware counters. */
 #endif
@@ -1800,7 +1866,7 @@ mlx4_rxq_stats_reset(struct rte_eth_dev *dev, uint16_t idx)
 	const struct priv *priv = dev->data->dev_private;
 
 	assert(idx < priv->rxqs_n);
-	(*priv->rxqs)[idx].stats = (struct rte_rxq_stats){ .ipackets = 0 };
+	(*priv->rxqs)[idx]->stats = (struct rte_rxq_stats){ .ipackets = 0 };
 #ifndef MLX4_PMD_SOFT_COUNTERS
 	/* FIXME: reset hardware counters. */
 #endif
@@ -1812,7 +1878,7 @@ mlx4_txq_stats_reset(struct rte_eth_dev *dev, uint16_t idx)
 	const struct priv *priv = dev->data->dev_private;
 
 	assert(idx < priv->txqs_n);
-	(*priv->txqs)[idx].stats = (struct rte_txq_stats){ .opackets = 0 };
+	(*priv->txqs)[idx]->stats = (struct rte_txq_stats){ .opackets = 0 };
 #ifndef MLX4_PMD_SOFT_COUNTERS
 	/* FIXME: reset hardware counters. */
 #endif
@@ -2020,14 +2086,14 @@ mlx4_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 			rxq_mac_addrs_del(&priv->rxq_parent);
 		else
 			for (i = 0; (i != priv->rxqs_n); ++i)
-				rxq_mac_addrs_del(&(*priv->rxqs)[i]);
+				rxq_mac_addrs_del((*priv->rxqs)[i]);
 		priv->vlan_filter[j].enabled = 1;
 		if (priv->started) {
 			if (priv->rss)
 				rxq_mac_addrs_add(&priv->rxq_parent);
 			else
 				for (i = 0; (i != priv->rxqs_n); ++i)
-					rxq_mac_addrs_add(&(*priv->rxqs)[i]);
+					rxq_mac_addrs_add((*priv->rxqs)[i]);
 		}
 	}
 	else if ((!on) && (priv->vlan_filter[j].enabled)) {
@@ -2039,14 +2105,14 @@ mlx4_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 			rxq_mac_addrs_del(&priv->rxq_parent);
 		else
 			for (i = 0; (i != priv->rxqs_n); ++i)
-				rxq_mac_addrs_del(&(*priv->rxqs)[i]);
+				rxq_mac_addrs_del((*priv->rxqs)[i]);
 		priv->vlan_filter[j].enabled = 0;
 		if (priv->started) {
 			if (priv->rss)
 				rxq_mac_addrs_add(&priv->rxq_parent);
 			else
 				for (i = 0; (i != priv->rxqs_n); ++i)
-					rxq_mac_addrs_add(&(*priv->rxqs)[i]);
+					rxq_mac_addrs_add((*priv->rxqs)[i]);
 		}
 	}
 }
