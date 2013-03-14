@@ -798,7 +798,7 @@ txq_setup(struct rte_eth_dev *dev, struct txq *txq, uint16_t desc,
 	};
 	tmpl.qp = ibv_create_qp(priv->pd, &attr.init);
 	if (tmpl.qp == NULL) {
-		ret = ENOMEM;
+		ret = errno;
 		DEBUG("%p: QP creation failure: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
