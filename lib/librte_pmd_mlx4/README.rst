@@ -23,7 +23,9 @@ This driver is based on ``libibverbs`` and currently supports:
 - Software counters/statistics.
 - Start/stop/close operations.
 - Multiple physical ports host adapter (requires a DPDK patch).
-    
+- DPDK 1.2.2 (6WIND or Intel).
+- DPDK 1.3.0 (6WIND or Intel).
+
 Unsupported features:
 
 - Promiscuous mode.
@@ -31,9 +33,6 @@ Unsupported features:
 - VLAN filtering doesn't work (not interpreted in kernel driver).
 - Hardware counters.
 - RSS hash key and options cannot be modified.
-- Increasing the number of RX/TX queues at runtime (not safe with DPDK 1.2).
-
-It can be compiled either internally or externally to the DPDK.
 
 Installation
 ============
@@ -65,8 +64,7 @@ applies to its headers location (``-I``).
 
 Other requirements:
 
-- Intel (or 6WIND-provided) DPDK version 1.2.2 source tree (other versions
-  are currently not supported).
+- A supported Intel (or 6WIND-provided) DPDK version.
 - An up-to-date GCC-based toolchain.
 
 Compilation (internal)
@@ -78,9 +76,10 @@ and internally linked with it.
 A few Makefiles and source files in the DPDK must be patched first in order
 to include the new driver. This patch is provided separately.
 
-Other patches (also provided separately) can be necessary:
+Other patches (also provided separately for DPDK 1.2.2 and DPDK 1.3.0) may be
+necessary:
 
-- One that fixes compilation warnings/errors when enabling debugging.
+- One that fixes compilation warnings/errors when debugging is enabled.
 - Another that enables the DPDK to manage more than a single physical port
   per adapter (the DPDK normally expects one PCI bus address per port).
 
@@ -89,12 +88,14 @@ IGB and IXGBE drivers (``librte_pmd_igb`` and ``librte_pmd_ixgbe``).
 
 ::
 
- # unzip 504977_DPDK.L.1.2.2_2.zip 
- Archive:  504977_DPDK.L.1.2.2_2.zip
-   creating: DPDK/
-  inflating: DPDK/Makefile           
-   creating: DPDK/app/
-  inflating: DPDK/app/Makefile
+ # unzip 516836_DPDK.L.1.3.0_183.zip
+ Archive:  516836_DPDK.L.1.3.0_183.zip
+    creating: DPDK/
+   inflating: DPDK/LICENSE.GPL
+   inflating: DPDK/LICENSE.LGPL
+   inflating: DPDK/Makefile
+    creating: DPDK/app/
+   inflating: DPDK/app/Makefile
  [...]
  # cd DPDK
  # patch -p2 < ~/0001-librte_pmd_mlx4-implement-driver-support.patch
@@ -104,17 +105,17 @@ IGB and IXGBE drivers (``librte_pmd_igb`` and ``librte_pmd_ixgbe``).
  # patch -p2 < ~/0003-pci-allow-drivers-to-be-bound-several-times-to-the-s.patch
  [...]
  # cd lib
- # tar xzf ~/librte_pmd_mlx4-1.0.tar.gz
- # ln -s librte_pmd_mlx4-1.0 librte-pmd_mlx4
+ # tar xzf ~/librte_pmd_mlx4-1.5.tar.gz
+ # ln -s librte_pmd_mlx4-1.5 librte_pmd_mlx4
  # ls -ld librte_pmd_*
- drwxr-xr-x. 1 foo users 4096 Jun 14  2012 librte_pmd_igb
- drwxr-xr-x. 1 foo users 4096 Jun 14  2012 librte_pmd_ixgbe
- lrwxrwxrwx. 1 foo users   19 Jan 23 15:24 librte_pmd_mlx4 -> librte_pmd_mlx4-1.0
- drwxr-xr-x. 1 foo users 4096 Jan 20 17:10 librte_pmd_mlx4-1.0
+ drwxr-xr-x. 3 root root 4096 Dec 17 12:09 librte_pmd_e1000
+ drwxr-xr-x. 3 root root 4096 Dec 17 12:09 librte_pmd_ixgbe
+ lrwxrwxrwx. 1 root root   19 Mar 22 10:27 librte_pmd_mlx4 -> librte_pmd_mlx4-1.5
+ drwxr-xr-x. 2 root root 4096 Mar 22 10:26 librte_pmd_mlx4-1.5
 
 After this, the DPDK is ready to be configured/compiled and installed. Please
-refer to its installation procedure. The default configuration templates
-include ``librte_pmd_mlx4`` by default.
+refer to its installation procedure. The configuration templates include
+``librte_pmd_mlx4`` by default.
 
 Configuration/compilation example::
 
@@ -136,28 +137,20 @@ Compilation (external)
 In this mode, ``librte_pmd_mlx4`` is compiled independently as a shared
 object. The DPDK source tree is only required for its headers.
 
-**While compiling like this is possible with Intel's DPDK, only 6WIND's
-version is currently able to load and use the resulting library.**
-
-As with internal compilation, the DPDK may require the following patches:
-
-- One that fixes compilation warnings/errors when enabling debugging.
-- Another that enables the DPDK to manage more than a single physical port
-  per adapter (the DPDK normally expects one PCI bus address per port).
-
-See previous section for how to apply them and configure/compile the DPDK.
+**Note: this mode is only supported by 6WIND's DPDK.**
 
 Once the DPDK is compiled, ``librte_pmd_mlx4`` can be unpacked elsewhere and
 compiled::
 
- # tar xzf librte_pmd_mlx4-1.0.tar.gz
- # cd librte_pmd_mlx4-1.0
+ # tar xzf librte_pmd_mlx4-1.5.tar.gz
+ # cd librte_pmd_mlx4-1.5
  # make clean
  rm -f librte_pmd_mlx4.so mlx4.o
- # make RTE_SDK=~/DPDK
+ # make RTE_SDK=~/DPDK DPDK_6WIND=1
  warning: RTE_TARGET is not set.
- gcc -I/root/incoming/1.2.2/DPDK/build/include -O3 -std=gnu99 -Wall -Wextra -fPIC -D_XOPEN_SOURCE=600 -DNDEBUG -UPEDANTIC   -c -o mlx4.o mlx4.c
+ gcc -I/root/DPDK/build/include -O3 -std=gnu99 -Wall -Wextra -fPIC -D_XOPEN_SOURCE=600 -DNDEBUG -UPEDANTIC   -c -o mlx4.o mlx4.c
  gcc -shared -libverbs -o librte_pmd_mlx4.so mlx4.o
+ #
 
 The following macros can be overridden on the command-line:
 
@@ -186,28 +179,34 @@ similar host.
 Run ``testpmd`` interactively from the DPDK build tree (for more information
 about its command-line options, please refer to its documentation)::
 
- # ~/DPDK/build/app/testpmd -c 0x6 -n 1 -- -i # internal
+ # ~/DPDK/build/app/testpmd -c 0x6 -n 3 -- -i # internal
  # # or:
- # ~/DPDK/build-app/testpmd -d ~/librte_pmd_mlx4-1.0/librte_pmd_mlx4.so -c 0x6 -n 1 -- -i # external
+ # ~/DPDK/build/app/testpmd -d ~/librte_pmd_mlx4-1.5/librte_pmd_mlx4.so -c 0x6 -n 3 -- -i # external
  EAL: coremask set to 6
- EAL: Detected lcore 0 on socket 0
- EAL: Detected lcore 1 on socket 0
- EAL: Detected lcore 2 on socket 0
- EAL: Detected lcore 3 on socket 0
- EAL: Detected lcore 4 on socket 0
- EAL: Detected lcore 5 on socket 0
- EAL: Detected lcore 6 on socket 0
- EAL: Detected lcore 7 on socket 0
+ EAL: Error reading numa node link for lcore 1 - using physical package id instead
+ EAL: Detected lcore 1 as core 1 on socket 0
+ EAL: Error reading numa node link for lcore 2 - using physical package id instead
+ EAL: Detected lcore 2 as core 2 on socket 0
+ EAL: Setting up hugepage memory...
+ EAL: Ask a virtual area of 0xc00000 bytes
+ EAL: Virtual area found at 0x7fb438e00000 (size = 0xc00000)
+ [...]
+ EAL: Requesting 1024 pages of size 2MB from socket 0
+ EAL: Increasing open file limit
  EAL: WARNING: Cannot mmap /dev/hpet! The TSC will be used instead.
- EAL: Master core 1 is ready (tid=66c12800)
- EAL: Core 2 is ready (tid=6220c700)
+ EAL: Master core 1 is ready (tid=f7d38800)
+ EAL: Core 2 is ready (tid=745f2700)
  EAL: probe driver: 15b3:1003 rte_mlx4_pmd
  EAL: probe driver: 15b3:1003 rte_mlx4_pmd
  EAL: probe driver: 15b3:1003 rte_mlx4_pmd
  Interactive-mode selected
- Initializing port 0... done:  Link Up - speed 40000 Mbps - full-duplex
- Initializing port 1... done:  Link Up - speed 40000 Mbps - full-duplex
- testpmd> 
+ Configuring Port 0
+ Configuring Port 1
+ Checking link statuses...
+ Port 0 Link Up - speed 40000 Mbps - full-duplex
+ Port 1 Link Up - speed 40000 Mbps - full-duplex
+ Done
+ testpmd>
 
 The following commands are typed from the ``testpmd`` interactive prompt.
 
@@ -223,6 +222,10 @@ The following commands are typed from the ``testpmd`` interactive prompt.
    Promiscuous mode: enabled
    Allmulticast mode: disabled
    Maximum number of MAC addresses: 128
+   VLAN offload:
+     strip on
+     filter on
+     qinq(extend) off
 
    ********************* Infos for port 1  *********************
    MAC address: 00:02:C9:F6:7D:71
@@ -232,6 +235,10 @@ The following commands are typed from the ``testpmd`` interactive prompt.
    Promiscuous mode: enabled
    Allmulticast mode: disabled
    Maximum number of MAC addresses: 128
+   VLAN offload:
+     strip on
+     filter on
+     qinq(extend) off
    testpmd>
 
 - Check port status after disconnecting one of them::
@@ -246,6 +253,10 @@ The following commands are typed from the ``testpmd`` interactive prompt.
    Promiscuous mode: enabled
    Allmulticast mode: disabled
    Maximum number of MAC addresses: 128
+   VLAN offload:
+     strip on
+     filter on
+     qinq(extend) off
 
    ********************* Infos for port 1  *********************
    MAC address: 00:02:C9:F6:7D:71
@@ -255,6 +266,10 @@ The following commands are typed from the ``testpmd`` interactive prompt.
    Promiscuous mode: enabled
    Allmulticast mode: disabled
    Maximum number of MAC addresses: 128
+   VLAN offload:
+     strip on
+     filter on
+     qinq(extend) off
    testpmd>
 
 - Plug it back and start basic forwarding between the two ports::
@@ -266,7 +281,7 @@ The following commands are typed from the ``testpmd`` interactive prompt.
      RX threshold registers: pthresh=8 hthresh=8 wthresh=4
      TX queues=1 - TX desc=512 - TX free threshold=0
      TX threshold registers: pthresh=36 hthresh=0 wthresh=0
-     TX RS bit threshold=0
+     TX RS bit threshold=0 - TXQ flags=0x0
    testpmd>
 
 - On the other host (under Linux), enable both interfaces, run ``tcpdump`` on
@@ -304,3 +319,11 @@ The following commands are typed from the ``testpmd`` interactive prompt.
      TX-packets: 0          TX-errors: 0         TX-bytes: 0
      ############################################################################
    testpmd>
+
+- Exit ``testpmd``::
+
+   testpmd> quit
+   Stopping port 0...done
+   Stopping port 1...done
+   bye...
+   #
