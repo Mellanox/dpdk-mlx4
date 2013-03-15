@@ -901,6 +901,7 @@ mlx4_tx_queue_release(dpdk_txq_t *dpdk_txq)
 			break;
 		}
 	txq_cleanup(txq);
+	free(txq);
 }
 
 #endif /* BUILT_DPDKP_VERSION */
@@ -1679,6 +1680,7 @@ mlx4_rx_queue_release(dpdk_rxq_t *dpdk_rxq)
 	struct priv *priv = rxq->priv;
 	unsigned int i;
 
+	assert(rxq != &priv->rxq_parent);
 	for (i = 0; (i != priv->rxqs_n); ++i)
 		if ((*priv->rxqs)[i] == rxq) {
 			DEBUG("%p: removing RX queue %p from list",
@@ -1687,6 +1689,7 @@ mlx4_rx_queue_release(dpdk_rxq_t *dpdk_rxq)
 			break;
 		}
 	rxq_cleanup(rxq);
+	free(rxq);
 }
 
 #endif /* BUILT_DPDK_VERSION */
@@ -1798,6 +1801,7 @@ mlx4_dev_close(struct rte_eth_dev *dev)
 			tmp = (*priv->rxqs)[i];
 			(*priv->rxqs)[i] = NULL;
 			rxq_cleanup(tmp);
+			free(tmp);
 		}
 		priv->rxqs_n = 0;
 #if BUILT_DPDK_VERSION < DPDK_VERSION(1, 3, 0)
@@ -1819,6 +1823,7 @@ mlx4_dev_close(struct rte_eth_dev *dev)
 			tmp = (*priv->txqs)[i];
 			(*priv->txqs)[i] = NULL;
 			txq_cleanup(tmp);
+			free(tmp);
 		}
 		priv->txqs_n = 0;
 #if BUILT_DPDK_VERSION < DPDK_VERSION(1, 3, 0)
