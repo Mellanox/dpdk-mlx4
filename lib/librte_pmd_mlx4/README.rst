@@ -44,13 +44,23 @@ Requirements
 A Linux host with either a full installation of Mellanox OFED (updated
 kernel drivers and libraries), or only following components:
 
-- Mellanox OFA kernel drivers (``mlnx-ofa_kernel-1.8.6``).
-- Generic verbs library and headers (``libibverbs-1.1.6``).
-- Mellanox ConnectX InfiniBand library (``libmlx4-1.0.4``).
-- Userspace driver for Mellanox ConnectX InfiniBand (``libmverbs-0.1.0``).
+- Mellanox OFA kernel drivers (``mlnx-ofa_kernel``).
+- Generic verbs library and headers (``libibverbs``).
+- Mellanox ConnectX InfiniBand library (``libmlx4``).
+
+Some of the above components in their current version must be patched for RSS
+support and compiled in the following order:
+
+- ``mlnx-ofa_kernel-1.8.6`` requires a patch for RSS support.
+- ``libibverbs-1.1.6`` requires a patch for RSS support.
+- ``libmlx4-1.0.4`` doesn't require any patch but must be recompiled after
+  patching ``libibverbs``.
+- Other ``libibverbs`` dependencies (not currently used by
+  ``librte_pmd_mlx4``) may also need recompilation, but this is out of the
+  scope of this document.
 
 ``libibverbs`` is assumed to be installed in a standard system location and
-can be found without specific linker flags (such as ``-L``). The same
+should be found without specific linker flags (such as ``-L``). The same
 applies to its headers location (``-I``).
 
 Other requirements:
