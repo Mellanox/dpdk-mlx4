@@ -893,6 +893,8 @@ mlx4_tx_queue_release(dpdk_txq_t *dpdk_txq)
 	struct priv *priv = txq->priv;
 	unsigned int i;
 
+	if (txq == NULL)
+		return;
 	for (i = 0; (i != priv->txqs_n); ++i)
 		if ((*priv->txqs)[i] == txq) {
 			DEBUG("%p: removing TX queue %p from list",
@@ -1252,9 +1254,12 @@ priv_mac_addr_add(struct priv *priv, unsigned int mac_index,
 	if (!priv->started) {
 #ifndef NDEBUG
 		/* Verify that all queues have this index disabled. */
-		for (i = 0; (i != priv->rxqs_n); ++i)
+		for (i = 0; (i != priv->rxqs_n); ++i) {
+			if ((*priv->rxqs)[i] == NULL)
+				continue;
 			assert(!BITFIELD_ISSET
 			       ((*priv->rxqs)[i]->mac_configured, mac_index));
+		}
 #endif
 		goto end;
 	}
@@ -1265,12 +1270,15 @@ priv_mac_addr_add(struct priv *priv, unsigned int mac_index,
 		goto end;
 	}
 	for (i = 0; (i != priv->rxqs_n); ++i) {
+		if ((*priv->rxqs)[i] == NULL)
+			continue;
 		ret = rxq_mac_addr_add((*priv->rxqs)[i], mac_index);
 		if (!ret)
 			continue;
 		/* Failure, rollback. */
 		while (i != 0)
-			rxq_mac_addr_del((*priv->rxqs)[(--i)], mac_index);
+			if ((*priv->rxqs)[(--i)] != NULL)
+				rxq_mac_addr_del((*priv->rxqs)[i], mac_index);
 		return ret;
 	}
 end:
@@ -1680,6 +1688,8 @@ mlx4_rx_queue_release(dpdk_rxq_t *dpdk_rxq)
 	struct priv *priv = rxq->priv;
 	unsigned int i;
 
+	if (rxq == NULL)
+		return;
 	assert(rxq != &priv->rxq_parent);
 	for (i = 0; (i != priv->rxqs_n); ++i)
 		if ((*priv->rxqs)[i] == rxq) {
@@ -1716,15 +1726,20 @@ mlx4_dev_start(struct rte_eth_dev *dev)
 		return -1;
 	}
 	for (i = 0; (i != priv->rxqs_n); ++i) {
-		int ret = rxq_mac_addrs_add((*priv->rxqs)[i]);
+		int ret;
 
+		/* Ignore nonexistent RX queues. */
+		if ((*priv->rxqs)[i] == NULL)
+			continue;
+		ret = rxq_mac_addrs_add((*priv->rxqs)[i]);
 		if (ret == 0)
 			continue;
 		DEBUG("%p: QP flow attachment failed: %s",
 		      (void *)dev, strerror(ret));
 		/* Rollback. */
 		while (i != 0)
-			rxq_mac_addrs_del((*priv->rxqs)[(--i)]);
+			if ((*priv->rxqs)[(--i)] == NULL)
+				rxq_mac_addrs_del((*priv->rxqs)[i]);
 		priv->started = 0;
 		return -1;
 	}
@@ -1747,7 +1762,8 @@ mlx4_dev_stop(struct rte_eth_dev *dev)
 		return;
 	}
 	for (i = 0; (i != priv->rxqs_n); ++i)
-		rxq_mac_addrs_del((*priv->rxqs)[i]);
+		if ((*priv->rxqs)[i] != NULL)
+			rxq_mac_addrs_del((*priv->rxqs)[i]);
 }
 
 #if BUILT_DPDK_VERSION < DPDK_VERSION(1, 3, 0)
@@ -1799,6 +1815,8 @@ mlx4_dev_close(struct rte_eth_dev *dev)
 #endif /* BUILT_DPDK_VERSION */
 		for (i = 0; (i != priv->rxqs_n); ++i) {
 			tmp = (*priv->rxqs)[i];
+			if (tmp == NULL)
+				continue;
 			(*priv->rxqs)[i] = NULL;
 			rxq_cleanup(tmp);
 			free(tmp);
@@ -1821,6 +1839,8 @@ mlx4_dev_close(struct rte_eth_dev *dev)
 #endif /* BUILT_DPDK_VERSION */
 		for (i = 0; (i != priv->txqs_n); ++i) {
 			tmp = (*priv->txqs)[i];
+			if (tmp == NULL)
+				continue;
 			(*priv->txqs)[i] = NULL;
 			txq_cleanup(tmp);
 			free(tmp);
@@ -1878,12 +1898,16 @@ mlx4_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 
 	/* Add software counters. */
 	for (i = 0; (i != priv->rxqs_n); ++i) {
+		if ((*priv->rxqs)[i] == NULL)
+			continue;
 		tmp.ipackets += (*priv->rxqs)[i]->stats.ipackets;
 		tmp.ibytes += (*priv->rxqs)[i]->stats.ibytes;
 		tmp.ierrors += (*priv->rxqs)[i]->stats.idropped;
 		tmp.rx_nombuf += (*priv->rxqs)[i]->stats.rx_nombuf;
 	}
 	for (i = 0; (i != priv->txqs_n); ++i) {
+		if ((*priv->txqs)[i] == NULL)
+			continue;
 		tmp.opackets += (*priv->txqs)[i]->stats.opackets;
 		tmp.obytes += (*priv->txqs)[i]->stats.obytes;
 		tmp.oerrors += (*priv->txqs)[i]->stats.odropped;
@@ -1900,12 +1924,18 @@ mlx4_stats_reset(struct rte_eth_dev *dev)
 	const struct priv *priv = dev->data->dev_private;
 	unsigned int i;
 
-	for (i = 0; (i != priv->rxqs_n); ++i)
+	for (i = 0; (i != priv->rxqs_n); ++i) {
+		if ((*priv->rxqs)[i] == NULL)
+			continue;
 		(*priv->rxqs)[i]->stats =
 			(struct rte_rxq_stats){ .ipackets = 0 };
-	for (i = 0; (i != priv->txqs_n); ++i)
+	}
+	for (i = 0; (i != priv->txqs_n); ++i) {
+		if ((*priv->txqs)[i] == NULL)
+			continue;
 		(*priv->txqs)[i]->stats =
 			(struct rte_txq_stats){ .opackets = 0 };
+	}
 #ifndef MLX4_PMD_SOFT_COUNTERS
 	/* FIXME: reset hardware counters. */
 #endif
@@ -1920,6 +1950,8 @@ mlx4_rxq_stats_get(struct rte_eth_dev *dev, uint16_t idx,
 	const struct priv *priv = dev->data->dev_private;
 
 	assert(idx < priv->rxqs_n);
+	if ((*priv->rxqs)[idx] == NULL)
+		return;
 	*stats = (*priv->rxqs)[idx]->stats;
 #ifndef MLX4_PMD_SOFT_COUNTERS
 	/* FIXME: add hardware counters. */
@@ -1933,6 +1965,8 @@ mlx4_txq_stats_get(struct rte_eth_dev *dev, uint16_t idx,
 	const struct priv *priv = dev->data->dev_private;
 
 	assert(idx < priv->txqs_n);
+	if ((*priv->txqs)[idx] == NULL)
+		return;
 	*stats = (*priv->txqs)[idx]->stats;
 #ifndef MLX4_PMD_SOFT_COUNTERS
 	/* FIXME: add hardware counters. */
@@ -1945,6 +1979,8 @@ mlx4_rxq_stats_reset(struct rte_eth_dev *dev, uint16_t idx)
 	const struct priv *priv = dev->data->dev_private;
 
 	assert(idx < priv->rxqs_n);
+	if ((*priv->rxqs)[idx] == NULL)
+		return;
 	(*priv->rxqs)[idx]->stats = (struct rte_rxq_stats){ .ipackets = 0 };
 #ifndef MLX4_PMD_SOFT_COUNTERS
 	/* FIXME: reset hardware counters. */
@@ -1957,6 +1993,8 @@ mlx4_txq_stats_reset(struct rte_eth_dev *dev, uint16_t idx)
 	const struct priv *priv = dev->data->dev_private;
 
 	assert(idx < priv->txqs_n);
+	if ((*priv->txqs)[idx] == NULL)
+		return;
 	(*priv->txqs)[idx]->stats = (struct rte_txq_stats){ .opackets = 0 };
 #ifndef MLX4_PMD_SOFT_COUNTERS
 	/* FIXME: reset hardware counters. */
@@ -2165,14 +2203,18 @@ vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 			rxq_mac_addrs_del(&priv->rxq_parent);
 		else
 			for (i = 0; (i != priv->rxqs_n); ++i)
-				rxq_mac_addrs_del((*priv->rxqs)[i]);
+				if ((*priv->rxqs)[i] != NULL)
+					rxq_mac_addrs_del((*priv->rxqs)[i]);
 		priv->vlan_filter[j].enabled = 1;
 		if (priv->started) {
 			if (priv->rss)
 				rxq_mac_addrs_add(&priv->rxq_parent);
 			else
-				for (i = 0; (i != priv->rxqs_n); ++i)
+				for (i = 0; (i != priv->rxqs_n); ++i) {
+					if ((*priv->rxqs)[i] == NULL)
+						continue;
 					rxq_mac_addrs_add((*priv->rxqs)[i]);
+				}
 		}
 	}
 	else if ((!on) && (priv->vlan_filter[j].enabled)) {
@@ -2184,14 +2226,18 @@ vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 			rxq_mac_addrs_del(&priv->rxq_parent);
 		else
 			for (i = 0; (i != priv->rxqs_n); ++i)
-				rxq_mac_addrs_del((*priv->rxqs)[i]);
+				if ((*priv->rxqs)[i] != NULL)
+					rxq_mac_addrs_del((*priv->rxqs)[i]);
 		priv->vlan_filter[j].enabled = 0;
 		if (priv->started) {
 			if (priv->rss)
 				rxq_mac_addrs_add(&priv->rxq_parent);
 			else
-				for (i = 0; (i != priv->rxqs_n); ++i)
+				for (i = 0; (i != priv->rxqs_n); ++i) {
+					if ((*priv->rxqs)[i] == NULL)
+						continue;
 					rxq_mac_addrs_add((*priv->rxqs)[i]);
+				}
 		}
 	}
 	return 0;
