@@ -39,9 +39,10 @@ CC = gcc
 CFLAGS += -I$(RTE_SDK)/$(RTE_TARGET)/include
 CFLAGS += -O3 -std=gnu99 -Wall -Wextra -fPIC
 CFLAGS += -D_XOPEN_SOURCE=600
+CFLAGS += -g
 
 ifeq ($(DEBUG),1)
-CFLAGS += -pedantic -g -UNDEBUG -DPEDANTIC
+CFLAGS += -pedantic -UNDEBUG -DPEDANTIC
 else
 CFLAGS += -DNDEBUG -UPEDANTIC
 endif
