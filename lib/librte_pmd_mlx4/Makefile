@@ -46,11 +46,6 @@ else
 CFLAGS += -DNDEBUG -UPEDANTIC
 endif
 
-ifneq ($(IBVERBS),)
-CFLAGS += -I$(IBVERBS)/include
-LDFLAGS += -L$(IBVERBS)/
-endif
-
 LDFLAGS += -shared
 LDFLAGS += -libverbs
 

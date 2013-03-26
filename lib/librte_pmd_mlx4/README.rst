@@ -158,8 +158,6 @@ The following macros can be overridden on the command-line:
 - ``RTE_TARGET`` (default: ``build``): DPDK output directory for generated
   files.
 - ``DEBUG``: if ``1``, enable driver debugging.
-- ``IBVERBS``: source tree location of a compiled ``libibverbs`` (if not
-  installed system-wide).
 - ``DPDK_6WIND``: if ``1``, enable 6WIND DPDK extensions.
 
 Quick testing
