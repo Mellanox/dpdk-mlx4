@@ -41,6 +41,7 @@
 #include <rte_mempool.h>
 #include <rte_version.h>
 #include <rte_prefetch.h>
+#include <rte_malloc.h>
 #ifdef PEDANTIC
 #pragma GCC diagnostic error "-pedantic"
 #endif
@@ -143,6 +144,7 @@ struct rxq {
 	unsigned int elts_n; /* (*elts)[] length. */
 	struct rxq_elt (*elts)[]; /* RX elements. */
 	struct rte_rxq_stats stats; /* RX queue counters. */
+	unsigned int socket; /* CPU socket ID for allocations. */
 };
 
 /* TX element. */
@@ -172,6 +174,7 @@ struct txq {
 	unsigned int elts_free; /* Number of free WRs. */
 	struct txq_elt *lost_comp; /* Elements without a completion event. */
 	struct rte_txq_stats stats; /* TX queue counters. */
+	unsigned int socket; /* CPU socket ID for allocations. */
 };
 
 struct priv {
@@ -311,12 +314,12 @@ mlx4_dev_configure(struct rte_eth_dev *dev, uint16_t rxqs_n, uint16_t txqs_n)
 	assert(priv->rxqs == NULL);
 	assert(priv->txqs == NULL);
 	/* Allocate arrays. */
-	if (((rxqs = calloc(1, sizeof(*rxqs))) == NULL) ||
-	    ((txqs = calloc(1, sizeof(*txqs))) == NULL)) {
+	if (((rxqs = rte_calloc("RXQs", 1, sizeof(*rxqs), 0)) == NULL) ||
+	    ((txqs = rte_calloc("TXQs", 1, sizeof(*txqs), 0)) == NULL)) {
 		DEBUG("%p: unable to allocate RX or TX queues descriptors: %s",
 		      (void *)dev, strerror(errno));
-		free(rxqs);
-		free(txqs);
+		rte_free(rxqs);
+		rte_free(txqs);
 		return -errno;
 	}
 	dev->data->nb_rx_queues = rxqs_n;
@@ -334,7 +337,9 @@ static int
 txq_alloc_elts(struct txq *txq, unsigned int elts_n)
 {
 	unsigned int i;
-	struct txq_elt (*elts)[elts_n] = calloc(1, sizeof(*elts));
+	struct txq_elt (*elts)[elts_n] =
+		rte_calloc_socket("TXQ elements", 1, sizeof(*elts), 0,
+				  txq->socket);
 	int ret = 0;
 
 	if (elts == NULL) {
@@ -371,7 +376,7 @@ txq_alloc_elts(struct txq *txq, unsigned int elts_n)
 	assert(ret == 0);
 	return 0;
 error:
-	free(elts);
+	rte_free(elts);
 	DEBUG("%p: failed, freed everything", (void *)txq);
 	assert(ret != 0);
 	return ret;
@@ -400,7 +405,7 @@ txq_free_elts(struct txq *txq)
 				rte_pktmbuf_free_seg(buf);
 		}
 	}
-	free(elts);
+	rte_free(elts);
 }
 
 static void
@@ -748,7 +753,8 @@ txq_setup(struct rte_eth_dev *dev, struct txq *txq, uint16_t desc,
 {
 	struct priv *priv = dev->data->dev_private;
 	struct txq tmpl = {
-		.priv = priv
+		.priv = priv,
+		.socket = socket
 	};
 	union {
 		struct ibv_qp_init_attr init;
@@ -756,7 +762,6 @@ txq_setup(struct rte_eth_dev *dev, struct txq *txq, uint16_t desc,
 	} attr;
 	int ret = 0;
 
-	(void)socket; /* CPU socket for DMA allocation (ignored). */
 	(void)conf; /* Thresholds configuration (ignored). */
 	if ((desc == 0) || (desc % MLX4_PMD_SGE_WR_N)) {
 		DEBUG("%p: invalid number of TX descriptors (must be a"
@@ -869,14 +874,15 @@ mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		      (void *)dev, idx, (void *)txq);
 		return -EEXIST;
 	}
-	if ((txq = calloc(1, sizeof(*txq))) == NULL) {
+	txq = rte_calloc_socket("TXQ", 1, sizeof(*txq), 0, socket);
+	if (txq == NULL) {
 		DEBUG("%p: unable to allocate queue index %u: %s",
 		      (void *)dev, idx, strerror(errno));
 		return -errno;
 	}
 	ret = txq_setup(dev, txq, desc, socket, conf);
 	if (ret)
-		free(txq);
+		rte_free(txq);
 	else {
 		DEBUG("%p: adding TX queue %p to list",
 		      (void *)dev, (void *)txq);
@@ -904,7 +910,7 @@ mlx4_tx_queue_release(dpdk_txq_t *dpdk_txq)
 			break;
 		}
 	txq_cleanup(txq);
-	free(txq);
+	rte_free(txq);
 }
 
 #endif /* BUILT_DPDKP_VERSION */
@@ -915,7 +921,9 @@ static int
 rxq_alloc_elts(struct rxq *rxq, unsigned int elts_n)
 {
 	unsigned int i;
-	struct rxq_elt (*elts)[elts_n] = calloc(1, sizeof(*elts));
+	struct rxq_elt (*elts)[elts_n] =
+		rte_calloc_socket("RXQ elements", 1, sizeof(*elts), 0,
+				  rxq->socket);
 	int ret = 0;
 
 	if (elts == NULL) {
@@ -998,7 +1006,7 @@ error:
 					rte_pktmbuf_free_seg(buf);
 			}
 		}
-		free(elts);
+		rte_free(elts);
 	}
 	DEBUG("%p: failed, freed everything", (void *)rxq);
 	assert(ret != 0);
@@ -1028,7 +1036,7 @@ rxq_free_elts(struct rxq *rxq)
 				rte_pktmbuf_free_seg(buf);
 		}
 	}
-	free(elts);
+	rte_free(elts);
 }
 
 static void
@@ -1479,7 +1487,8 @@ rxq_setup(struct rte_eth_dev *dev, struct rxq *rxq, uint16_t desc,
 	struct priv *priv = dev->data->dev_private;
 	struct rxq tmpl = {
 		.priv = priv,
-		.mp = mp
+		.mp = mp,
+		.socket = socket
 	};
 	union {
 		struct ibv_qp_init_attr init;
@@ -1489,7 +1498,6 @@ rxq_setup(struct rte_eth_dev *dev, struct rxq *rxq, uint16_t desc,
 	int ret = 0;
 	int parent = (rxq == &priv->rxq_parent);
 
-	(void)socket; /* CPU socket for DMA allocation (ignored). */
 	(void)conf; /* Thresholds configuration (ignored). */
 	/*
 	 * If this is a parent queue, hardware must support RSS and
@@ -1664,14 +1672,15 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		      (void *)dev, idx, (void *)rxq);
 		return -EEXIST;
 	}
-	if ((rxq = calloc(1, sizeof(*rxq))) == NULL) {
+	rxq = rte_calloc_socket("RXQ", 1, sizeof(*rxq), 0, socket);
+	if (rxq == NULL) {
 		DEBUG("%p: unable to allocate queue index %u: %s",
 		      (void *)dev, idx, strerror(errno));
 		return -errno;
 	}
 	ret = rxq_setup(dev, rxq, desc, socket, conf, mp);
 	if (ret)
-		free(rxq);
+		rte_free(rxq);
 	else {
 		DEBUG("%p: adding RX queue %p to list",
 		      (void *)dev, (void *)rxq);
@@ -1700,7 +1709,7 @@ mlx4_rx_queue_release(dpdk_rxq_t *dpdk_rxq)
 			break;
 		}
 	rxq_cleanup(rxq);
-	free(rxq);
+	rte_free(rxq);
 }
 
 #endif /* BUILT_DPDK_VERSION */
@@ -1820,13 +1829,13 @@ mlx4_dev_close(struct rte_eth_dev *dev)
 				continue;
 			(*priv->rxqs)[i] = NULL;
 			rxq_cleanup(tmp);
-			free(tmp);
+			rte_free(tmp);
 		}
 		priv->rxqs_n = 0;
 #if BUILT_DPDK_VERSION < DPDK_VERSION(1, 3, 0)
 		tmp = priv->rxqs;
 		priv->rxqs = NULL;
-		free(tmp);
+		rte_free(tmp);
 #else /* BUILT_DPDK_VERSION */
 		priv->rxqs = NULL;
 #endif /* BUILT_DPDK_VERSION */
@@ -1844,13 +1853,13 @@ mlx4_dev_close(struct rte_eth_dev *dev)
 				continue;
 			(*priv->txqs)[i] = NULL;
 			txq_cleanup(tmp);
-			free(tmp);
+			rte_free(tmp);
 		}
 		priv->txqs_n = 0;
 #if BUILT_DPDK_VERSION < DPDK_VERSION(1, 3, 0)
 		tmp = priv->txqs;
 		priv->txqs = NULL;
-		free(tmp);
+		rte_free(tmp);
 #else /* BUILT_DPDK_VERSION */
 		priv->txqs = NULL;
 #endif /* BUILT_DPDK_VERSION */
