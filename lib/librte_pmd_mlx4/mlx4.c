@@ -434,7 +434,7 @@ txq_complete(struct txq *txq)
 	int ret = 0;
 
 	assert((elts_used + elts_free) == txq->elts_n);
-	if (elts_comp == 0)
+	if (unlikely(elts_comp == 0))
 		return 0;
 #ifdef DEBUG_SEND
 	DEBUG("%p: processing %u work requests completions",
@@ -446,15 +446,15 @@ txq_complete(struct txq *txq)
 	struct ibv_wc wcs[elts_comp];
 
 	wcs_n = ibv_poll_cq(txq->cq, elts_comp, wcs);
-	if (wcs_n == 0)
+	if (unlikely(wcs_n == 0))
 		return 0;
-	if (wcs_n < 0) {
+	if (unlikely(wcs_n < 0)) {
 		DEBUG("txq=%p, ibv_poll_cq() failed (wc_n=%d)",
 		      (void *)txq, wcs_n);
 		return -1;
 	}
 	/* Clear lost completion events. */
-	while (txq->lost_comp != NULL) {
+	while (unlikely(txq->lost_comp != NULL)) {
 		int j;
 		struct txq_elt *elt = txq->lost_comp;
 		struct ibv_send_wr *wr = &elt->wr;
@@ -475,7 +475,7 @@ txq_complete(struct txq *txq)
 		struct txq_elt *elt = &(*txq->elts)[wr_id];
 
 		assert(wr_id < txq->elts_n);
-		if (wc->status != IBV_WC_SUCCESS) {
+		if (unlikely(wc->status != IBV_WC_SUCCESS)) {
 			DEBUG("txq=%p, wr_id=%" PRIu64 ": bad work completion"
 			      " status (%d): %s",
 			      (void *)txq, wc->wr_id, wc->status,
@@ -524,7 +524,7 @@ txq_complete(struct txq *txq)
 			++elts_free;
 			elt = elt->comp;
 		}
-		while (elt != NULL);
+		while (unlikely(elt != NULL));
 		assert(elts_comp != 0);
 		--elts_comp;
 	}
@@ -551,7 +551,7 @@ txq_mp2mr(struct txq *txq, struct rte_mempool *mp)
 	struct ibv_mr *mr;
 
 	for (i = 0; (i != elemof(txq->mp2mr)); ++i) {
-		if (txq->mp2mr[i].mp == NULL) {
+		if (unlikely(txq->mp2mr[i].mp == NULL)) {
 			/* Unknown MP, add a new MR for it. */
 			break;
 		}
@@ -567,12 +567,12 @@ txq_mp2mr(struct txq *txq, struct rte_mempool *mp)
 	mp_size = mp_total_size(mp);
 	mr = ibv_reg_mr(txq->priv->pd, mp, mp_size,
 			(IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE));
-	if (mr == NULL) {
+	if (unlikely(mr == NULL)) {
 		DEBUG("%p: unable to configure MR, ibv_reg_mr() failed.",
 		      (void *)txq);
 		return (uint32_t)-1;
 	}
-	if (i == elemof(txq->mp2mr)) {
+	if (unlikely(i == elemof(txq->mp2mr))) {
 		/* Table is full, remove oldest entry. */
 		DEBUG("%p: MR <-> MP table full, dropping oldest entry.",
 		      (void *)txq);
@@ -606,7 +606,7 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	int err;
 
 	txq_complete(txq);
-	if (pkts_n == 0)
+	if (unlikely(pkts_n == 0))
 		return 0;
 	max = txq->elts_free;
 	if (max == 0) {
@@ -646,13 +646,14 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 
 			/* Retrive Memory Region key for this memory pool. */
 			lkey = txq_mp2mr(txq, buf->pool);
-			if (lkey == (uint32_t)-1) {
+			if (unlikely(lkey == (uint32_t)-1)) {
 				/* MR doesn't exist, stop here. */
 				DEBUG("unable to get MP <-> MR association");
 				break;
 			}
 			/* Ignore empty segments (except the first one). */
-			if ((buf->pkt.data_len == 0) && (buf != pkts[i]))
+			if (unlikely((buf->pkt.data_len == 0) &&
+				     (buf != pkts[i])))
 				continue;
 			/* Update SGE. */
 			elt->bufs[seg_n] = buf;
@@ -666,7 +667,7 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			txq->stats.obytes += sge->length;
 #endif
 		}
-		if (buf != NULL) {
+		if (unlikely(buf != NULL)) {
 			DEBUG("too many segments for packet (maximum is %zu)",
 			      elemof(elt->sges));
 			/* Ignore this packet. */
@@ -677,7 +678,7 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		/* Update WR. */
 		wr->num_sge = seg_n;
 		/* Update WR index. */
-		if (++elts_cur == txq->elts_n)
+		if (unlikely(++elts_cur == txq->elts_n))
 			elts_cur = 0;
 	next:
 #ifdef MLX4_PMD_SOFT_COUNTERS
@@ -693,7 +694,7 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	/* Make sure all packets have been processed in the previous loop. */
 	assert(i == max);
 	err = ibv_post_send(txq->qp, head.next, &bad_wr);
-	if (err) {
+	if (unlikely(err)) {
 		struct txq_elt *bad = containerof(bad_wr, struct txq_elt, wr);
 		struct txq_elt *first = bad;
 
@@ -1316,9 +1317,9 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	int i;
 
 	wcs_n = ibv_poll_cq(rxq->cq, pkts_n, wcs);
-	if (wcs_n == 0)
+	if (likely(wcs_n == 0))
 		return 0;
-	if (wcs_n < 0) {
+	if (unlikely(wcs_n < 0)) {
 		DEBUG("rxq=%p, ibv_poll_cq() failed (wc_n=%d)",
 		      (void *)rxq, wcs_n);
 		return -1;
@@ -1344,7 +1345,7 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		/* Link completed WRs together for repost. */
 		*next = wr;
 		next = &wr->next;
-		if (wc->status != IBV_WC_SUCCESS) {
+		if (unlikely(wc->status != IBV_WC_SUCCESS)) {
 			/* Whatever, just repost the offending WR. */
 			DEBUG("rxq=%p, wr_id=%" PRIu64 ": bad work completion"
 			      " status (%d): %s",
@@ -1378,7 +1379,7 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			 */
 			rte_prefetch0(&seg->pkt);
 			rep = rte_pktmbuf_alloc(rxq->mp);
-			if (rep == NULL) {
+			if (unlikely(rep == NULL)) {
 				/*
 				 * Unable to allocate a replacement mbuf,
 				 * repost WR.
@@ -1410,7 +1411,7 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			assert(((uintptr_t)rep->buf_addr +
 				RTE_PKTMBUF_HEADROOM) ==
 			       (uintptr_t)rep->pkt.data);
-			if (seg_headroom == 0)
+			if (unlikely(seg_headroom == 0))
 				rep->pkt.data = rep->buf_addr;
 			assert(rte_pktmbuf_headroom(rep) == seg_headroom);
 			assert(rte_pktmbuf_tailroom(rep) == seg_tailroom);
@@ -1423,7 +1424,7 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			seg->pkt.in_port = rxq->port_id;
 			seg->pkt.data_len = seg_tailroom;
 			/* Append seg to pkt_buf. */
-			if (pkt_buf == NULL)
+			if (likely(pkt_buf == NULL))
 				pkt_buf = seg;
 			else
 				*pkt_buf_next = seg;
@@ -1455,7 +1456,7 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	      (void *)rxq, wcs_n, wcs[0].wr_id, (void *)head.next);
 #endif
 	i = ibv_post_recv(rxq->qp, head.next, &bad_wr);
-	if (i) {
+	if (unlikely(i)) {
 		/* Inability to repost WRs is fatal. */
 		DEBUG("%p: ibv_post_recv(): failed for WR %p: %s",
 		      (void *)rxq->priv,

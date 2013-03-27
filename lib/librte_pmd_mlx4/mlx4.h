@@ -69,6 +69,14 @@
 /* Cast pointer p to structure member m to its parent structure of type t. */
 #define containerof(p, t, m) ((t *)((uint8_t *)(p) - offsetof(t, m)))
 
+/* Branch prediction helpers. */
+#ifndef likely
+#define likely(c) __builtin_expect(!!(c), 1)
+#endif
+#ifndef unlikely
+#define unlikely(c) __builtin_expect(!!(c), 0)
+#endif
+
 /* Debugging */
 #ifndef NDEBUG
 #include <stdio.h>
