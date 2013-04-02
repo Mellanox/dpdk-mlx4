@@ -2414,7 +2414,7 @@ mlx4_dev_idx(struct rte_pci_addr *pci_addr)
 static struct eth_driver mlx4_driver;
 
 static int
-mlx4_dev_init(struct eth_driver *drv, struct rte_eth_dev *dev)
+mlx4_generic_init(struct eth_driver *drv, struct rte_eth_dev *dev, int dry_init)
 {
 	struct priv *priv = dev->data->dev_private;
 	struct ibv_device **list;
@@ -2509,12 +2509,16 @@ mlx4_dev_init(struct eth_driver *drv, struct rte_eth_dev *dev)
 		DEBUG("bad state for port %d: \"%s\" (%d)",
 		      port, ibv_port_state_str(port_attr.state),
 		      port_attr.state);
-	/* Allocate protection domain. */
-	pd = ibv_alloc_pd(ctx);
-	if (pd == NULL) {
-		DEBUG("PD allocation failure");
-		errno = ENOMEM;
-		goto error;
+	if (dry_init)
+		pd = NULL;
+	else {
+		/* Allocate protection domain. */
+		pd = ibv_alloc_pd(ctx);
+		if (pd == NULL) {
+			DEBUG("PD allocation failure");
+			errno = ENOMEM;
+			goto error;
+		}
 	}
 	mlx4_dev[idx].ports |= test;
 	memset(priv, 0, sizeof(*priv));
@@ -2566,6 +2570,18 @@ error:
 	return -err;
 }
 
+static int
+mlx4_dev_init(struct eth_driver *drv, struct rte_eth_dev *dev)
+{
+	return mlx4_generic_init(drv, dev, 0);
+}
+
+static int
+mlx4_dry_init(struct eth_driver *drv, struct rte_eth_dev *dev)
+{
+	return mlx4_generic_init(drv, dev, 1);
+}
+
 static struct rte_pci_id mlx4_pci_id_map[] = {
 	{
 		.vendor_id = PCI_VENDOR_ID_MELLANOX,
@@ -2587,6 +2603,7 @@ static struct eth_driver mlx4_driver = {
 #endif /* RTE_PCI_DRV_MULTIPLE */
 	},
 	.eth_dev_init = mlx4_dev_init,
+	.eth_dev_dry_init = mlx4_dry_init,
 	.dev_private_size = sizeof(struct priv)
 };
 
