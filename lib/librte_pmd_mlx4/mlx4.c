@@ -2414,7 +2414,7 @@ mlx4_dev_idx(struct rte_pci_addr *pci_addr)
 static struct eth_driver mlx4_driver;
 
 static int
-mlx4_generic_init(struct eth_driver *drv, struct rte_eth_dev *dev, int dry_init)
+mlx4_generic_init(struct eth_driver *drv, struct rte_eth_dev *dev, int probe)
 {
 	struct priv *priv = dev->data->dev_private;
 	struct ibv_device **list;
@@ -2509,7 +2509,7 @@ mlx4_generic_init(struct eth_driver *drv, struct rte_eth_dev *dev, int dry_init)
 		DEBUG("bad state for port %d: \"%s\" (%d)",
 		      port, ibv_port_state_str(port_attr.state),
 		      port_attr.state);
-	if (dry_init)
+	if (probe)
 		pd = NULL;
 	else {
 		/* Allocate protection domain. */
@@ -2576,11 +2576,13 @@ mlx4_dev_init(struct eth_driver *drv, struct rte_eth_dev *dev)
 	return mlx4_generic_init(drv, dev, 0);
 }
 
+#ifdef DPDK_6WIND
 static int
-mlx4_dry_init(struct eth_driver *drv, struct rte_eth_dev *dev)
+mlx4_dev_probe(struct eth_driver *drv, struct rte_eth_dev *dev)
 {
 	return mlx4_generic_init(drv, dev, 1);
 }
+#endif
 
 static struct rte_pci_id mlx4_pci_id_map[] = {
 	{
@@ -2603,7 +2605,9 @@ static struct eth_driver mlx4_driver = {
 #endif /* RTE_PCI_DRV_MULTIPLE */
 	},
 	.eth_dev_init = mlx4_dev_init,
-	.eth_dev_dry_init = mlx4_dry_init,
+#ifdef DPDK_6WIND
+	.eth_dev_probe = mlx4_dev_probe,
+#endif
 	.dev_private_size = sizeof(struct priv)
 };
 
