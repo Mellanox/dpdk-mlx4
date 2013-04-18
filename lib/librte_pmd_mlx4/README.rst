@@ -105,13 +105,13 @@ IGB and IXGBE drivers (``librte_pmd_igb`` and ``librte_pmd_ixgbe``).
  # patch -p2 < ~/0003-pci-allow-drivers-to-be-bound-several-times-to-the-s.patch
  [...]
  # cd lib
- # tar xzf ~/librte_pmd_mlx4-1.5.tar.gz
- # ln -s librte_pmd_mlx4-1.5 librte_pmd_mlx4
+ # tar xzf ~/librte_pmd_mlx4-1.9.tar.gz
+ # ln -s librte_pmd_mlx4-1.9 librte_pmd_mlx4
  # ls -ld librte_pmd_*
  drwxr-xr-x. 3 root root 4096 Dec 17 12:09 librte_pmd_e1000
  drwxr-xr-x. 3 root root 4096 Dec 17 12:09 librte_pmd_ixgbe
- lrwxrwxrwx. 1 root root   19 Mar 22 10:27 librte_pmd_mlx4 -> librte_pmd_mlx4-1.5
- drwxr-xr-x. 2 root root 4096 Mar 22 10:26 librte_pmd_mlx4-1.5
+ lrwxrwxrwx. 1 root root   19 Apr 15 15:49 librte_pmd_mlx4 -> librte_pmd_mlx4-1.9
+ drwxr-xr-x. 2 root root 4096 Apr 15 15:42 librte_pmd_mlx4-1.9
 
 After this, the DPDK is ready to be configured/compiled and installed. Please
 refer to its installation procedure. The configuration templates include
@@ -142,8 +142,8 @@ object. The DPDK source tree is only required for its headers.
 Once the DPDK is compiled, ``librte_pmd_mlx4`` can be unpacked elsewhere and
 compiled::
 
- # tar xzf librte_pmd_mlx4-1.5.tar.gz
- # cd librte_pmd_mlx4-1.5
+ # tar xzf librte_pmd_mlx4-1.9.tar.gz
+ # cd librte_pmd_mlx4-1.9
  # make clean
  rm -f librte_pmd_mlx4.so mlx4.o
  # make RTE_SDK=~/DPDK DPDK_6WIND=1
@@ -179,7 +179,7 @@ about its command-line options, please refer to its documentation)::
 
  # ~/DPDK/build/app/testpmd -c 0x6 -n 3 -- -i # internal
  # # or:
- # ~/DPDK/build/app/testpmd -d ~/librte_pmd_mlx4-1.5/librte_pmd_mlx4.so -c 0x6 -n 3 -- -i # external
+ # ~/DPDK/build/app/testpmd -d ~/librte_pmd_mlx4-1.9/librte_pmd_mlx4.so -c 0x6 -n 3 -- -i # external
  EAL: coremask set to 6
  EAL: Error reading numa node link for lcore 1 - using physical package id instead
  EAL: Detected lcore 1 as core 1 on socket 0
