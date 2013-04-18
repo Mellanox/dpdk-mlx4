@@ -50,10 +50,10 @@ kernel drivers and libraries), or only following components:
 Some of the above components in their current version must be patched for RSS
 support and compiled in the following order:
 
-- ``mlnx-ofa_kernel-1.8.6`` requires a patch for RSS support.
-- ``libibverbs-1.1.6`` requires a patch for RSS support.
-- ``libmlx4-1.0.4`` doesn't require any patch but must be recompiled after
-  patching ``libibverbs``.
+- ``mlnx-ofa_kernel-2.0`` requires a patch for RSS support.
+- ``libibverbs-1.1.6mlnx1`` requires a patch for RSS support.
+- ``libmlx4-1.0.4mlnx1`` doesn't require any patch but must be recompiled
+  after patching ``libibverbs``.
 - Other ``libibverbs`` dependencies (not currently used by
   ``librte_pmd_mlx4``) may also need recompilation, but this is out of the
   scope of this document.
