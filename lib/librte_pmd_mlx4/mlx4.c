@@ -10,9 +10,8 @@
  * - Broadcast/multicast bit isn't managed properly. This driver is only
  *   able to match broadcast frames with ff:ff:ff:ff:ff:ff as the destination
  *   address.
- * - VLAN filtering is implemented but doesn't work. Flow specifications
- *   (ibv_flow_spec) store information about it, but the kernel currently
- *   ignores it.
+ * - Multiple RX VLAN filters can be configured, but only the first one
+ *   works properly.
  * - RSS hash key and options cannot be modified.
  * - Hardware counters aren't implemented.
  */
@@ -132,14 +131,11 @@ struct rxq {
 	struct ibv_cq *cq; /* Completion Queue. */
 	struct ibv_qp *qp; /* Queue Pair. */
 	/*
-	 * Since flow specifications (ibv_flow_spec) are common to all
-	 * RX queues, they are generated on the fly from MAC addresses,
-	 * VLAN filters and other information in priv.
-	 * The only information stored here is whether MAC flows are
-	 * configured for this queue (local copy of priv->mac_configured,
-	 * except when priv->started is 0).
+	 * There is exactly one flow configured per MAC address. Each flow
+	 * may contain several specifications, one per configured VLAN ID.
 	 */
 	BITFIELD_DECLARE(mac_configured, uint32_t, MLX4_MAX_MAC_ADDRESSES);
+	struct ibv_flow *mac_flow[MLX4_MAX_MAC_ADDRESSES];
 	unsigned int port_id; /* Port ID for incoming packets. */
 	unsigned int elts_n; /* (*elts)[] length. */
 	struct rxq_elt (*elts)[]; /* RX elements. */
@@ -187,12 +183,6 @@ struct priv {
 	 * MAC addresses array and configuration bit-field.
 	 * An extra entry that cannot be modified by the DPDK is reserved
 	 * for broadcast frames (destination MAC address ff:ff:ff:ff:ff:ff).
-	 *
-	 * XXX
-	 * We're currently not able to use a mask on the destination MAC
-	 * address. Thus, there's no way to match a single bit (least
-	 * significant bit in the first octet for broadcast frames) or
-	 * "anything" (for promiscuous mode emulation).
 	 */
 	struct ether_addr mac[MLX4_MAX_MAC_ADDRESSES];
 	BITFIELD_DECLARE(mac_configured, uint32_t, MLX4_MAX_MAC_ADDRESSES);
@@ -1042,63 +1032,26 @@ rxq_free_elts(struct rxq *rxq)
 static void
 rxq_mac_addr_del(struct rxq *rxq, unsigned int mac_index)
 {
+#ifndef NDEBUG
 	struct priv *priv = rxq->priv;
 	const uint8_t (*mac)[ETHER_ADDR_LEN] =
 		(const uint8_t (*)[ETHER_ADDR_LEN])
 		priv->mac[mac_index].addr_bytes;
-	unsigned int i;
+#endif
 
 	assert(mac_index < elemof(priv->mac));
-	if (!BITFIELD_ISSET(rxq->mac_configured, mac_index))
+	if (!BITFIELD_ISSET(rxq->mac_configured, mac_index)) {
+		assert(rxq->mac_flow[mac_index] == NULL);
 		return;
-	/*
-	 * Set i as the index of either the first VLAN filter enabled in
-	 * priv->vlan_filter[], or the last array entry. It doesn't matter if
-	 * that entry is enabled or not, we only need it to loop at least once
-	 * in the following do {} block.
-	 */
-	for (i = 0; (i != (elemof(priv->vlan_filter) - 1)); ++i)
-		if (priv->vlan_filter[i].enabled)
-			break;
-	/* For each configured VLAN filter... */
-	do {
-		unsigned int vlan = priv->vlan_filter[i].id;
-		unsigned int vlan_present = priv->vlan_filter[i].enabled;
-		struct ibv_flow_spec spec = {
-			.type = IBV_FLOW_ETH,
-			.l2_id = {
-				.eth = {
-					.ethertype = htons(0x0800),
-					.vlan = (vlan_present ? vlan : 0),
-					.vlan_present = vlan_present,
-					.mac = {
-						(*mac)[0], (*mac)[1],
-						(*mac)[2], (*mac)[3],
-						(*mac)[4], (*mac)[5]
-					},
-					.port = priv->port
-				}
-			},
-			.l4_protocol = IBV_FLOW_L4_NONE
-		};
-
-		DEBUG("rxq=%p: removing MAC address"
-		      " %02x:%02x:%02x:%02x:%02x:%02x from index %u"
-		      " (VLAN filter %s, ID: %u)",
-		      (void *)rxq,
-		      (*mac)[0], (*mac)[1], (*mac)[2],
-		      (*mac)[3], (*mac)[4], (*mac)[5],
-		      mac_index,
-		      (vlan_present ? "enabled" : "disabled"),
-		      (vlan_present ? vlan : 0));
-		/* Detach related flow. */
-		claim_zero(ibv_detach_flow(rxq->qp, &spec, 0));
-		/* Get the next VLAN filter index (if any). */
-		while ((++i) != elemof(priv->vlan_filter))
-			if (priv->vlan_filter[i].enabled)
-				break;
 	}
-	while (i != elemof(priv->vlan_filter));
+	DEBUG("%p: removing MAC address %02x:%02x:%02x:%02x:%02x:%02x"
+	      " index %u",
+	      (void *)rxq,
+	      (*mac)[0], (*mac)[1], (*mac)[2], (*mac)[3], (*mac)[4], (*mac)[5],
+	      mac_index);
+	assert(rxq->mac_flow[mac_index] != NULL);
+	claim_zero(ibv_destroy_flow(rxq->mac_flow[mac_index]));
+	rxq->mac_flow[mac_index] = NULL;
 	BITFIELD_RESET(rxq->mac_configured, mac_index);
 }
 
@@ -1119,75 +1072,83 @@ rxq_mac_addr_add(struct rxq *rxq, unsigned int mac_index)
 	const uint8_t (*mac)[ETHER_ADDR_LEN] =
 		(const uint8_t (*)[ETHER_ADDR_LEN])
 		priv->mac[mac_index].addr_bytes;
-	unsigned int i;
+	unsigned int vlans = 0;
+	unsigned int specs = 0;
+	unsigned int i, j;
+	struct ibv_flow *flow;
 
 	assert(mac_index < elemof(priv->mac));
 	if (BITFIELD_ISSET(rxq->mac_configured, mac_index))
 		rxq_mac_addr_del(rxq, mac_index);
-	/*
-	 * Set i as the index of either the first VLAN filter enabled in
-	 * priv->vlan_filter[], or the last array entry. It doesn't matter if
-	 * that entry is enabled or not, we only need it to loop at least once
-	 * in the following do {} block.
-	 */
-	for (i = 0; (i != (elemof(priv->vlan_filter) - 1)); ++i)
+	/* Number of configured VLANs. */
+	for (i = 0; (i != elemof(priv->vlan_filter)); ++i)
 		if (priv->vlan_filter[i].enabled)
-			break;
-	/* For each configured VLAN filter... */
-	do {
-		unsigned int vlan = priv->vlan_filter[i].id;
-		unsigned int vlan_present = priv->vlan_filter[i].enabled;
-		struct ibv_flow_spec spec = {
-			.type = IBV_FLOW_ETH,
-			.l2_id = {
-				.eth = {
-					.ethertype = htons(0x0800),
-					.vlan = (vlan_present ? vlan : 0),
-					.vlan_present = vlan_present,
-					.mac = {
-						(*mac)[0], (*mac)[1],
-						(*mac)[2], (*mac)[3],
-						(*mac)[4], (*mac)[5]
-					},
-					.port = priv->port
-				}
-			},
-			.l4_protocol = IBV_FLOW_L4_NONE
-		};
-		int ret;
+			++vlans;
+	specs = (vlans ? vlans : 1);
 
-		DEBUG("rxq=%p: adding MAC address"
-		      " %02x:%02x:%02x:%02x:%02x:%02x from index %u"
-		      " (VLAN filter %s, ID: %u)",
-		      (void *)rxq,
-		      (*mac)[0], (*mac)[1], (*mac)[2],
-		      (*mac)[3], (*mac)[4], (*mac)[5],
-		      mac_index,
-		      (vlan_present ? "enabled" : "disabled"),
-		      (vlan_present ? vlan : 0));
-		/* Attach related flow. */
-		if ((ret = ibv_attach_flow(rxq->qp, &spec, 0))) {
-			/* Failure, rollback. */
-			DEBUG("rxq=%p: failed adding MAC address",
-			      (void *)rxq);
-			while (i != 0) {
-				--i;
-				if (!priv->vlan_filter[i].enabled)
-					continue;
-				assert(spec.l2_id.eth.vlan_present);
-				vlan = priv->vlan_filter[i].id;
-				spec.l2_id.eth.vlan = vlan;
-				/* Detach related flow. */
-				claim_zero(ibv_detach_flow(rxq->qp, &spec, 0));
+	/* Allocate flow specification on the stack. */
+	struct ibv_flow_attr data[1 +
+				  (sizeof(struct ibv_flow_spec_eth[specs]) /
+				   sizeof(struct ibv_flow_attr)) +
+				  !!(sizeof(struct ibv_flow_spec_eth[specs]) %
+				     sizeof(struct ibv_flow_attr))];
+	struct ibv_flow_attr *attr = (void *)&data[0];
+	struct ibv_flow_spec_eth *spec = (void *)&data[1];
+
+	/*
+	 * No padding must be inserted by the compiler between attr and spec.
+	 * This layout is expected by libibverbs.
+	 */
+	assert(((uint8_t *)attr + sizeof(*attr)) == (uint8_t *)spec);
+	*attr = (struct ibv_flow_attr){
+		.type = IBV_FLOW_ATTR_NORMAL,
+		.num_of_specs = specs,
+		.port = priv->port,
+		.flags = 0
+	};
+	*spec = (struct ibv_flow_spec_eth){
+		.type = IBV_FLOW_SPEC_ETH,
+		.size = sizeof(*spec),
+		.val = {
+			.dst_mac = {
+				(*mac)[0], (*mac)[1], (*mac)[2],
+				(*mac)[3], (*mac)[4], (*mac)[5]
 			}
-			return ret;
+		},
+		.mask = {
+			.dst_mac = "\xff\xff\xff\xff\xff\xff",
+			.vlan_tag = (vlans ? 0xfff : 0)
 		}
-		/* Get the next VLAN filter index (if any). */
-		while ((++i) != elemof(priv->vlan_filter))
-			if (priv->vlan_filter[i].enabled)
-				break;
+	};
+	/* Fill VLAN specifications. */
+	for (i = 0, j = 0; (i != elemof(priv->vlan_filter)); ++i) {
+		if (!priv->vlan_filter[i].enabled)
+			continue;
+		assert(j != vlans);
+		if (j)
+			spec[j] = spec[0];
+		spec[j].val.vlan_tag = priv->vlan_filter[i].id;
+		++j;
 	}
-	while (i != elemof(priv->vlan_filter));
+	DEBUG("%p: adding MAC address %02x:%02x:%02x:%02x:%02x:%02x index %u"
+	      " (%u VLAN(s) configured)",
+	      (void *)rxq,
+	      (*mac)[0], (*mac)[1], (*mac)[2], (*mac)[3], (*mac)[4], (*mac)[5],
+	      mac_index,
+	      vlans);
+	/* Create related flow. */
+	errno = 0;
+	if ((flow = ibv_create_flow(rxq->qp, attr)) == NULL) {
+		/* It's not clear whether errno is always set in this case. */
+		DEBUG("%p: flow configuration failed, errno=%d: %s",
+		      (void *)rxq, errno,
+		      (errno ? strerror(errno) : "Unknown error"));
+		if (errno)
+			return errno;
+		return EINVAL;
+	}
+	assert(rxq->mac_flow[mac_index] == NULL);
+	rxq->mac_flow[mac_index] = flow;
 	BITFIELD_SET(rxq->mac_configured, mac_index);
 	return 0;
 }
