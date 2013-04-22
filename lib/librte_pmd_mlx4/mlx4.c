@@ -5,8 +5,6 @@
 
 /*
  * Known limitations:
- * - Promiscuous mode doesn't work, libibverbs doesn't provide a way to
- *   control it.
  * - Broadcast/multicast bit isn't managed properly. This driver is only
  *   able to match broadcast frames with ff:ff:ff:ff:ff:ff as the destination
  *   address.
@@ -136,6 +134,7 @@ struct rxq {
 	 */
 	BITFIELD_DECLARE(mac_configured, uint32_t, MLX4_MAX_MAC_ADDRESSES);
 	struct ibv_flow *mac_flow[MLX4_MAX_MAC_ADDRESSES];
+	struct ibv_flow *promisc_flow; /* Promiscuous flow. */
 	unsigned int port_id; /* Port ID for incoming packets. */
 	unsigned int elts_n; /* (*elts)[] length. */
 	struct rxq_elt (*elts)[]; /* RX elements. */
@@ -1256,12 +1255,59 @@ end:
 	return 0;
 }
 
+static int
+rxq_promiscuous_enable(struct rxq *rxq)
+{
+	struct ibv_flow *flow;
+	struct ibv_flow_attr attr = {
+		/*
+		 * XXX IBV_FLOW_ATTR_ALL_DEFAULT is used in place of
+		 * IBV_FLOW_ATTR_SNIFFER because the latter doesn't work
+		 * and triggers kernel Oopses in this version:
+		 * mlnx-ofa_kernel-2.0-OFED.2.0.0.2.1.ga62cf7e
+		 */
+		.type = IBV_FLOW_ATTR_ALL_DEFAULT,
+		.num_of_specs = 0,
+		.port = rxq->priv->port,
+		.flags = 0
+	};
+
+	DEBUG("%p: enabling promiscuous mode", (void *)rxq);
+	if (rxq->promisc_flow != NULL)
+		return EBUSY;
+	errno = 0;
+	if ((flow = ibv_create_flow(rxq->qp, &attr)) == NULL) {
+		/* It's not clear whether errno is always set in this case. */
+		DEBUG("%p: flow configuration failed, errno=%d: %s",
+		      (void *)rxq, errno,
+		      (errno ? strerror(errno) : "Unknown error"));
+		if (errno)
+			return errno;
+		return EINVAL;
+	}
+	rxq->promisc_flow = flow;
+	DEBUG("%p: promiscuous mode enabled", (void *)rxq);
+	return 0;
+}
+
+static void
+rxq_promiscuous_disable(struct rxq *rxq)
+{
+	DEBUG("%p: disabling promiscuous mode", (void *)rxq);
+	if (rxq->promisc_flow == NULL)
+		return;
+	claim_zero(ibv_destroy_flow(rxq->promisc_flow));
+	rxq->promisc_flow = NULL;
+	DEBUG("%p: promiscuous mode disabled", (void *)rxq);
+}
+
 static void
 rxq_cleanup(struct rxq *rxq)
 {
 	DEBUG("cleaning up %p", (void *)rxq);
 	rxq_free_elts(rxq);
 	if (rxq->qp != NULL) {
+		rxq_promiscuous_disable(rxq);
 		rxq_mac_addrs_del(rxq);
 		claim_zero(ibv_destroy_qp(rxq->qp));
 	}
@@ -1680,40 +1726,45 @@ static int
 mlx4_dev_start(struct rte_eth_dev *dev)
 {
 	struct priv *priv = dev->data->dev_private;
-	unsigned int i;
+	unsigned int i = 0;
+	unsigned int r;
+	struct rxq *rxq;
 
 	if (priv->started)
 		return 0;
 	DEBUG("%p: attaching configured flows to all RX queues", (void *)dev);
 	priv->started = 1;
 	if (priv->rss) {
-		int ret = rxq_mac_addrs_add(&priv->rxq_parent);
-
-		if (ret == 0)
-			return 0;
-		DEBUG("%p: QP flow attachment failed: %s",
-		      (void *)dev, strerror(ret));
-		priv->started = 0;
-		return -1;
+		rxq = &priv->rxq_parent;
+		r = 1;
 	}
-	for (i = 0; (i != priv->rxqs_n); ++i) {
+	else {
+		rxq = (*priv->rxqs)[0];
+		r = priv->rxqs_n;
+	}
+	/* Iterate only once when RSS is enabled. */
+	do {
 		int ret;
 
 		/* Ignore nonexistent RX queues. */
-		if ((*priv->rxqs)[i] == NULL)
+		if (rxq == NULL)
 			continue;
-		ret = rxq_mac_addrs_add((*priv->rxqs)[i]);
-		if (ret == 0)
+		if (((ret = rxq_mac_addrs_add(rxq)) == 0) &&
+		    ((!priv->promisc) ||
+		     ((ret = rxq_promiscuous_enable(rxq)) == 0)))
 			continue;
 		DEBUG("%p: QP flow attachment failed: %s",
 		      (void *)dev, strerror(ret));
 		/* Rollback. */
 		while (i != 0)
-			if ((*priv->rxqs)[(--i)] == NULL)
-				rxq_mac_addrs_del((*priv->rxqs)[i]);
+			if ((rxq = (*priv->rxqs)[--i]) != NULL) {
+				rxq_promiscuous_disable(rxq);
+				rxq_mac_addrs_del(rxq);
+			}
 		priv->started = 0;
 		return -1;
 	}
+	while ((--r) && ((rxq = (*priv->rxqs)[++i]), i));
 	return 0;
 }
 
@@ -1722,19 +1773,31 @@ static void
 mlx4_dev_stop(struct rte_eth_dev *dev)
 {
 	struct priv *priv = dev->data->dev_private;
-	unsigned int i;
+	unsigned int i = 0;
+	unsigned int r;
+	struct rxq *rxq;
 
 	if (!priv->started)
 		return;
 	DEBUG("%p: detaching flows from all RX queues", (void *)dev);
 	priv->started = 0;
 	if (priv->rss) {
-		rxq_mac_addrs_del(&priv->rxq_parent);
-		return;
+		rxq = &priv->rxq_parent;
+		r = 1;
 	}
-	for (i = 0; (i != priv->rxqs_n); ++i)
-		if ((*priv->rxqs)[i] != NULL)
-			rxq_mac_addrs_del((*priv->rxqs)[i]);
+	else {
+		rxq = (*priv->rxqs)[0];
+		r = priv->rxqs_n;
+	}
+	/* Iterate only once when RSS is enabled. */
+	do {
+		/* Ignore nonexistent RX queues. */
+		if (rxq == NULL)
+			continue;
+		rxq_promiscuous_disable(rxq);
+		rxq_mac_addrs_del(rxq);
+	}
+	while ((--r) && ((rxq = (*priv->rxqs)[++i]), i));
 }
 
 #if BUILT_DPDK_VERSION < DPDK_VERSION(1, 3, 0)
@@ -2014,22 +2077,53 @@ static void
 mlx4_promiscuous_enable(struct rte_eth_dev *dev)
 {
 	struct priv *priv = dev->data->dev_private;
+	unsigned int i;
+	int ret;
 
 	if (priv->promisc)
 		return;
+	/* If device isn't started, this is all we need to do. */
+	if (!priv->started)
+		goto end;
+	if (priv->rss) {
+		ret = rxq_promiscuous_enable(&priv->rxq_parent);
+		if (ret)
+			return;
+		goto end;
+	}
+	for (i = 0; (i != priv->rxqs_n); ++i) {
+		if ((*priv->rxqs)[i] == NULL)
+			continue;
+		ret = rxq_promiscuous_enable((*priv->rxqs)[i]);
+		if (!ret)
+			continue;
+		/* Failure, rollback. */
+		while (i != 0)
+			if ((*priv->rxqs)[--i] != NULL)
+				rxq_promiscuous_disable((*priv->rxqs)[i]);
+		return;
+	}
+end:
 	priv->promisc = 1;
-	/* FIXME */
 }
 
 static void
 mlx4_promiscuous_disable(struct rte_eth_dev *dev)
 {
 	struct priv *priv = dev->data->dev_private;
+	unsigned int i;
 
 	if (!priv->promisc)
 		return;
+	if (priv->rss) {
+		rxq_promiscuous_disable(&priv->rxq_parent);
+		goto end;
+	}
+	for (i = 0; (i != priv->rxqs_n); ++i)
+		if ((*priv->rxqs)[i] != NULL)
+			rxq_promiscuous_disable((*priv->rxqs)[i]);
+end:
 	priv->promisc = 0;
-	/* FIXME */
 }
 
 static void
