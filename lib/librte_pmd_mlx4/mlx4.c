@@ -5,9 +5,6 @@
 
 /*
  * Known limitations:
- * - Broadcast/multicast bit isn't managed properly. This driver is only
- *   able to match broadcast frames with ff:ff:ff:ff:ff:ff as the destination
- *   address.
  * - Multiple RX VLAN filters can be configured, but only the first one
  *   works properly.
  * - RSS hash key and options cannot be modified.
@@ -135,6 +132,7 @@ struct rxq {
 	BITFIELD_DECLARE(mac_configured, uint32_t, MLX4_MAX_MAC_ADDRESSES);
 	struct ibv_flow *mac_flow[MLX4_MAX_MAC_ADDRESSES];
 	struct ibv_flow *promisc_flow; /* Promiscuous flow. */
+	struct ibv_flow *allmulti_flow; /* Multicast flow. */
 	unsigned int port_id; /* Port ID for incoming packets. */
 	unsigned int elts_n; /* (*elts)[] length. */
 	struct rxq_elt (*elts)[]; /* RX elements. */
@@ -195,6 +193,7 @@ struct priv {
 	uint8_t port; /* Physical port number. */
 	unsigned int started:1; /* Device started, flows enabled. */
 	unsigned int promisc:1; /* Device in promiscuous mode. */
+	unsigned int allmulti:1; /* Device receives all multicast packets. */
 	unsigned int hw_qpg:1; /* QP groups are supported. */
 	unsigned int hw_tss:1; /* TSS is supported. */
 	unsigned int hw_rss:1; /* RSS is supported. */
@@ -1255,6 +1254,47 @@ end:
 	return 0;
 }
 
+
+static int
+rxq_allmulticast_enable(struct rxq *rxq)
+{
+	struct ibv_flow *flow;
+	struct ibv_flow_attr attr = {
+		.type = IBV_FLOW_ATTR_MC_DEFAULT,
+		.num_of_specs = 0,
+		.port = rxq->priv->port,
+		.flags = 0
+	};
+
+	DEBUG("%p: enabling allmulticast mode", (void *)rxq);
+	if (rxq->allmulti_flow != NULL)
+		return EBUSY;
+	errno = 0;
+	if ((flow = ibv_create_flow(rxq->qp, &attr)) == NULL) {
+		/* It's not clear whether errno is always set in this case. */
+		DEBUG("%p: flow configuration failed, errno=%d: %s",
+		      (void *)rxq, errno,
+		      (errno ? strerror(errno) : "Unknown error"));
+		if (errno)
+			return errno;
+		return EINVAL;
+	}
+	rxq->allmulti_flow = flow;
+	DEBUG("%p: allmulticast mode enabled", (void *)rxq);
+	return 0;
+}
+
+static void
+rxq_allmulticast_disable(struct rxq *rxq)
+{
+	DEBUG("%p: disabling allmulticast mode", (void *)rxq);
+	if (rxq->allmulti_flow == NULL)
+		return;
+	claim_zero(ibv_destroy_flow(rxq->allmulti_flow));
+	rxq->allmulti_flow = NULL;
+	DEBUG("%p: allmulticast mode disabled", (void *)rxq);
+}
+
 static int
 rxq_promiscuous_enable(struct rxq *rxq)
 {
@@ -1308,6 +1348,7 @@ rxq_cleanup(struct rxq *rxq)
 	rxq_free_elts(rxq);
 	if (rxq->qp != NULL) {
 		rxq_promiscuous_disable(rxq);
+		rxq_allmulticast_disable(rxq);
 		rxq_mac_addrs_del(rxq);
 		claim_zero(ibv_destroy_qp(rxq->qp));
 	}
@@ -1751,13 +1792,16 @@ mlx4_dev_start(struct rte_eth_dev *dev)
 			continue;
 		if (((ret = rxq_mac_addrs_add(rxq)) == 0) &&
 		    ((!priv->promisc) ||
-		     ((ret = rxq_promiscuous_enable(rxq)) == 0)))
+		     ((ret = rxq_promiscuous_enable(rxq)) == 0)) &&
+		    ((!priv->allmulti) ||
+		     ((ret = rxq_allmulticast_enable(rxq)) == 0)))
 			continue;
 		DEBUG("%p: QP flow attachment failed: %s",
 		      (void *)dev, strerror(ret));
 		/* Rollback. */
 		while (i != 0)
 			if ((rxq = (*priv->rxqs)[--i]) != NULL) {
+				rxq_allmulticast_disable(rxq);
 				rxq_promiscuous_disable(rxq);
 				rxq_mac_addrs_del(rxq);
 			}
@@ -1794,6 +1838,7 @@ mlx4_dev_stop(struct rte_eth_dev *dev)
 		/* Ignore nonexistent RX queues. */
 		if (rxq == NULL)
 			continue;
+		rxq_allmulticast_disable(rxq);
 		rxq_promiscuous_disable(rxq);
 		rxq_mac_addrs_del(rxq);
 	}
@@ -2129,15 +2174,54 @@ end:
 static void
 mlx4_allmulticast_enable(struct rte_eth_dev *dev)
 {
-	(void)dev;
-	/* FIXME */
+	struct priv *priv = dev->data->dev_private;
+	unsigned int i;
+	int ret;
+
+	if (priv->allmulti)
+		return;
+	/* If device isn't started, this is all we need to do. */
+	if (!priv->started)
+		goto end;
+	if (priv->rss) {
+		ret = rxq_allmulticast_enable(&priv->rxq_parent);
+		if (ret)
+			return;
+		goto end;
+	}
+	for (i = 0; (i != priv->rxqs_n); ++i) {
+		if ((*priv->rxqs)[i] == NULL)
+			continue;
+		ret = rxq_allmulticast_enable((*priv->rxqs)[i]);
+		if (!ret)
+			continue;
+		/* Failure, rollback. */
+		while (i != 0)
+			if ((*priv->rxqs)[--i] != NULL)
+				rxq_allmulticast_disable((*priv->rxqs)[i]);
+		return;
+	}
+end:
+	priv->allmulti = 1;
 }
 
 static void
 mlx4_allmulticast_disable(struct rte_eth_dev *dev)
 {
-	(void)dev;
-	/* FIXME */
+	struct priv *priv = dev->data->dev_private;
+	unsigned int i;
+
+	if (!priv->allmulti)
+		return;
+	if (priv->rss) {
+		rxq_allmulticast_disable(&priv->rxq_parent);
+		goto end;
+	}
+	for (i = 0; (i != priv->rxqs_n); ++i)
+		if ((*priv->rxqs)[i] != NULL)
+			rxq_allmulticast_disable((*priv->rxqs)[i]);
+end:
+	priv->allmulti = 0;
 }
 
 static int
