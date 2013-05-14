@@ -1434,7 +1434,7 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			 * cacheline while calling rte_pktmbuf_alloc().
 			 */
 			rte_prefetch0(&seg->pkt);
-			rep = rte_pktmbuf_alloc(rxq->mp);
+			rep = __rte_mbuf_raw_alloc(rxq->mp);
 			if (unlikely(rep == NULL)) {
 				/*
 				 * Unable to allocate a replacement mbuf,
@@ -1450,6 +1450,12 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 				++rxq->priv->dev->data->rx_mbuf_alloc_failed;
 				goto repost;
 			}
+#ifndef NDEBUG
+			else {
+				/* assert() checks below need this. */
+				rte_pktmbuf_reset(rep);
+			}
+#endif
 			seg_headroom = ((uintptr_t)seg->pkt.data -
 					(uintptr_t)seg->buf_addr);
 			seg_tailroom = (seg->buf_len - seg_headroom);
@@ -1469,6 +1475,10 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			       (uintptr_t)rep->pkt.data);
 			if (unlikely(seg_headroom == 0))
 				rep->pkt.data = rep->buf_addr;
+			else
+				rep->pkt.data =
+					(void *)((uintptr_t)rep->buf_addr +
+						 RTE_PKTMBUF_HEADROOM);
 			assert(rte_pktmbuf_headroom(rep) == seg_headroom);
 			assert(rte_pktmbuf_tailroom(rep) == seg_tailroom);
 			/* Reconfigure sge to use rep instead of seg. */
@@ -1477,7 +1487,10 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			assert(sge->lkey == rxq->mr->lkey);
 			elt->bufs[j] = rep;
 			/* Update seg information. */
+			rep->pkt.nb_segs = 1;
+			rep->pkt.next = NULL;
 			seg->pkt.in_port = rxq->port_id;
+			rep->pkt.pkt_len = seg_tailroom;
 			seg->pkt.data_len = seg_tailroom;
 			/* Append seg to pkt_buf. */
 			if (likely(pkt_buf == NULL))
