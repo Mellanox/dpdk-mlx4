@@ -1373,7 +1373,7 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	int i;
 
 	wcs_n = ibv_poll_cq(rxq->cq, pkts_n, wcs);
-	if (likely(wcs_n == 0))
+	if (unlikely(wcs_n == 0))
 		return 0;
 	if (unlikely(wcs_n < 0)) {
 		DEBUG("rxq=%p, ibv_poll_cq() failed (wc_n=%d)",
@@ -1385,13 +1385,12 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	for (i = 0; (i != wcs_n); ++i) {
 		struct ibv_wc *wc = &wcs[i];
 		uint64_t wr_id = wc->wr_id;
+		uint32_t len = wc->byte_len;
 		struct rxq_elt *elt = &(*elts)[wr_id];
 		struct ibv_recv_wr *wr = &elt->wr;
-		struct rte_mbuf *pkt_buf; /* Buffer to return in pkts. */
-		struct rte_mbuf **pkt_buf_next; /* &pkt_buf->pkt.next. */
-		uint32_t pkt_len; /* Length of pkt_buf. */
-		uint32_t cur_len;
-		unsigned int j;
+		struct rte_mbuf *pkt_buf = NULL; /* Buffer returned in pkts. */
+		struct rte_mbuf **pkt_buf_next = &pkt_buf;
+		unsigned int j = 0;
 
 		/* Sanity checks. */
 		assert(wr_id < rxq->elts_n);
@@ -1413,16 +1412,11 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 #endif
 			goto repost;
 		}
-		pkt_len = wc->byte_len;
-		pkt_buf = NULL;
-		pkt_buf_next = NULL;
-		cur_len = 0;
-		j = 0;
 		/*
 		 * Replace spent segments with new ones, concatenate and
 		 * return them as pkt_buf.
 		 */
-		do {
+		while (1) {
 			struct ibv_sge *sge = &elt->sges[j];
 			struct rte_mbuf *seg = elt->bufs[j];
 			struct rte_mbuf *rep;
@@ -1431,7 +1425,7 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 
 			/*
 			 * Fetch initial bytes of packet descriptor into a
-			 * cacheline while calling rte_pktmbuf_alloc().
+			 * cacheline while allocating rep.
 			 */
 			rte_prefetch0(&seg->pkt);
 			rep = __rte_mbuf_raw_alloc(rxq->mp);
@@ -1453,32 +1447,19 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 #ifndef NDEBUG
 			else {
 				/* assert() checks below need this. */
-				rte_pktmbuf_reset(rep);
+				rep->pkt.data_len = 0;
 			}
 #endif
 			seg_headroom = ((uintptr_t)seg->pkt.data -
 					(uintptr_t)seg->buf_addr);
 			seg_tailroom = (seg->buf_len - seg_headroom);
 			assert(seg_tailroom == rte_pktmbuf_tailroom(seg));
-#ifndef NDEBUG
 			/* Only the first segment comes with headroom. */
-			if (j == 0)
-				assert(seg_headroom == RTE_PKTMBUF_HEADROOM);
-			else
-				assert(seg_headroom == 0);
-#endif
-			/* Make rep use the same headroom as seg. */
-			assert(rte_pktmbuf_data_len(rep) == 0);
-			assert(rte_pktmbuf_pkt_len(rep) == 0);
-			assert(((uintptr_t)rep->buf_addr +
-				RTE_PKTMBUF_HEADROOM) ==
-			       (uintptr_t)rep->pkt.data);
-			if (unlikely(seg_headroom == 0))
-				rep->pkt.data = rep->buf_addr;
-			else
-				rep->pkt.data =
-					(void *)((uintptr_t)rep->buf_addr +
-						 RTE_PKTMBUF_HEADROOM);
+			assert((j == 0) ?
+			       (seg_headroom == RTE_PKTMBUF_HEADROOM) :
+			       (seg_headroom == 0));
+			rep->pkt.data = (void *)((uintptr_t)rep->buf_addr +
+						 seg_headroom);
 			assert(rte_pktmbuf_headroom(rep) == seg_headroom);
 			assert(rte_pktmbuf_tailroom(rep) == seg_tailroom);
 			/* Reconfigure sge to use rep instead of seg. */
@@ -1486,34 +1467,36 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			assert(sge->length == seg_tailroom);
 			assert(sge->lkey == rxq->mr->lkey);
 			elt->bufs[j] = rep;
-			/* Update seg information. */
-			rep->pkt.nb_segs = 1;
-			rep->pkt.next = NULL;
-			seg->pkt.in_port = rxq->port_id;
-			rep->pkt.pkt_len = seg_tailroom;
-			seg->pkt.data_len = seg_tailroom;
-			/* Append seg to pkt_buf. */
-			if (likely(pkt_buf == NULL))
-				pkt_buf = seg;
-			else
-				*pkt_buf_next = seg;
-			pkt_buf_next = &seg->pkt.next;
-			assert(seg->pkt.next == NULL);
 			++j;
-			cur_len += seg_tailroom;
+			/* Update pkt_buf if it's the first segment, or link
+			 * seg to the previous one and update pkt_buf_next. */
+			*pkt_buf_next = seg;
+			pkt_buf_next = &seg->pkt.next;
+			/* Update seg information. */
+			seg->pkt.nb_segs = 1;
+			seg->pkt.in_port = rxq->port_id;
+			if (likely(len <= seg_tailroom)) {
+				/* Last segment. */
+				seg->pkt.data_len = len;
+				seg->pkt.pkt_len = len;
+				break;
+			}
+			seg->pkt.data_len = seg_tailroom;
+			seg->pkt.pkt_len = seg_tailroom;
+			len -= seg_tailroom;
 		}
-		while (cur_len < pkt_len);
-		/* Fix size of the last segment. */
-		(containerof(pkt_buf_next, struct rte_pktmbuf, next))->
-			data_len -= (cur_len - pkt_len);
-		/* Return packet. */
+		/* Update head and tail segments. */
+		*pkt_buf_next = NULL;
 		assert(pkt_buf != NULL);
-		pkt_buf->pkt.pkt_len = pkt_len;
+		assert(j != 0);
+		pkt_buf->pkt.nb_segs = j;
+		pkt_buf->pkt.pkt_len = wc->byte_len;
+		/* Return packet. */
 		*(pkts++) = pkt_buf;
 		++ret;
 #ifdef MLX4_PMD_SOFT_COUNTERS
 		/* Increase bytes counter. */
-		rxq->stats.ibytes += pkt_len;
+		rxq->stats.ibytes += wc->byte_len;
 #endif
 	repost:
 		continue;
