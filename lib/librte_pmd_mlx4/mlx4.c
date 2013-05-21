@@ -860,7 +860,11 @@ mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	if (txq != NULL) {
 		DEBUG("%p: queue index %u is already allocated (%p)",
 		      (void *)dev, idx, (void *)txq);
-		return -EEXIST;
+		if (priv->started)
+			return -EEXIST;
+		(*priv->txqs)[idx] = NULL;
+		txq_cleanup(txq);
+		rte_free(txq);
 	}
 	txq = rte_calloc_socket("TXQ", 1, sizeof(*txq), 0, socket);
 	if (txq == NULL) {
@@ -1714,7 +1718,11 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	if (rxq != NULL) {
 		DEBUG("%p: queue index %u is already allocated (%p)",
 		      (void *)dev, idx, (void *)rxq);
-		return -EEXIST;
+		if (priv->started)
+			return -EEXIST;
+		(*priv->rxqs)[idx] = NULL;
+		rxq_cleanup(rxq);
+		rte_free(rxq);
 	}
 	rxq = rte_calloc_socket("RXQ", 1, sizeof(*rxq), 0, socket);
 	if (rxq == NULL) {
