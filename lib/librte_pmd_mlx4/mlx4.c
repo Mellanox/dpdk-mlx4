@@ -889,11 +889,12 @@ static void
 mlx4_tx_queue_release(dpdk_txq_t *dpdk_txq)
 {
 	struct txq *txq = (struct txq *)dpdk_txq;
-	struct priv *priv = txq->priv;
+	struct priv *priv;
 	unsigned int i;
 
 	if (txq == NULL)
 		return;
+	priv = txq->priv;
 	for (i = 0; (i != priv->txqs_n); ++i)
 		if ((*priv->txqs)[i] == txq) {
 			DEBUG("%p: removing TX queue %p from list",
@@ -1747,11 +1748,12 @@ static void
 mlx4_rx_queue_release(dpdk_rxq_t *dpdk_rxq)
 {
 	struct rxq *rxq = (struct rxq *)dpdk_rxq;
-	struct priv *priv = rxq->priv;
+	struct priv *priv;
 	unsigned int i;
 
 	if (rxq == NULL)
 		return;
+	priv = rxq->priv;
 	assert(rxq != &priv->rxq_parent);
 	for (i = 0; (i != priv->rxqs_n); ++i)
 		if ((*priv->rxqs)[i] == rxq) {
