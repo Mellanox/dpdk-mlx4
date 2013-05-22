@@ -110,11 +110,18 @@ static size_t mp_total_size(struct rte_mempool *mp)
 	return ret;
 }
 
-/* RX element. */
-struct rxq_elt {
+/* RX element (scattered packets). */
+struct rxq_elt_sp {
 	struct ibv_recv_wr wr; /* Work Request. */
 	struct ibv_sge sges[MLX4_PMD_SGE_WR_N]; /* Scatter/Gather Elements. */
 	struct rte_mbuf *bufs[MLX4_PMD_SGE_WR_N]; /* SGEs buffers. */
+};
+
+/* RX element. */
+struct rxq_elt {
+	struct ibv_recv_wr wr; /* Work Requesst. */
+	struct ibv_sge sge; /* Scatter/Gather Element. */
+	struct rte_mbuf *buf; /* SGE buffer. */
 };
 
 /* RX queue descriptor. */
@@ -135,7 +142,12 @@ struct rxq {
 	struct ibv_flow *allmulti_flow; /* Multicast flow. */
 	unsigned int port_id; /* Port ID for incoming packets. */
 	unsigned int elts_n; /* (*elts)[] length. */
-	struct rxq_elt (*elts)[]; /* RX elements. */
+	union {
+		struct rxq_elt_sp (*sp)[]; /* Scattered RX elements. */
+		struct rxq_elt (*no_sp)[]; /* RX elements. */
+	} elts;
+	unsigned int sp:1; /* Use scattered RX elements. */
+	uint32_t mb_len; /* Length of a mp-issued mbuf. */
 	struct rte_rxq_stats stats; /* RX queue counters. */
 	unsigned int socket; /* CPU socket ID for allocations. */
 };
@@ -911,10 +923,10 @@ mlx4_tx_queue_release(dpdk_txq_t *dpdk_txq)
 /* RX queues handling. */
 
 static int
-rxq_alloc_elts(struct rxq *rxq, unsigned int elts_n)
+rxq_alloc_elts_sp(struct rxq *rxq, unsigned int elts_n)
 {
 	unsigned int i;
-	struct rxq_elt (*elts)[elts_n] =
+	struct rxq_elt_sp (*elts)[elts_n] =
 		rte_calloc_socket("RXQ elements", 1, sizeof(*elts), 0,
 				  rxq->socket);
 	int ret = 0;
@@ -927,7 +939,7 @@ rxq_alloc_elts(struct rxq *rxq, unsigned int elts_n)
 	/* For each WR (packet). */
 	for (i = 0; (i != elts_n); ++i) {
 		unsigned int j;
-		struct rxq_elt *elt = &(*elts)[i];
+		struct rxq_elt_sp *elt = &(*elts)[i];
 		struct ibv_recv_wr *wr = &elt->wr;
 		struct ibv_sge (*sges)[(elemof(elt->sges))] = &elt->sges;
 
@@ -983,14 +995,14 @@ rxq_alloc_elts(struct rxq *rxq, unsigned int elts_n)
 	DEBUG("%p: allocated and configured %u WRs (%zu segments)",
 	      (void *)rxq, elts_n, (elts_n * elemof((*elts)[0].sges)));
 	rxq->elts_n = elts_n;
-	rxq->elts = elts;
+	rxq->elts.sp = elts;
 	assert(ret == 0);
 	return 0;
 error:
 	if (elts != NULL) {
 		for (i = 0; (i != elemof(*elts)); ++i) {
 			unsigned int j;
-			struct rxq_elt *elt = &(*elts)[i];
+			struct rxq_elt_sp *elt = &(*elts)[i];
 
 			for (j = 0; (j != elemof(elt->bufs)); ++j) {
 				struct rte_mbuf *buf = elt->bufs[j];
@@ -1007,20 +1019,20 @@ error:
 }
 
 static void
-rxq_free_elts(struct rxq *rxq)
+rxq_free_elts_sp(struct rxq *rxq)
 {
 	unsigned int i;
 	unsigned int elts_n = rxq->elts_n;
-	struct rxq_elt (*elts)[elts_n] = rxq->elts;
+	struct rxq_elt_sp (*elts)[elts_n] = rxq->elts.sp;
 
 	DEBUG("%p: freeing WRs", (void *)rxq);
 	rxq->elts_n = 0;
-	rxq->elts = NULL;
+	rxq->elts.sp = NULL;
 	if (elts == NULL)
 		return;
 	for (i = 0; (i != elemof(*elts)); ++i) {
 		unsigned int j;
-		struct rxq_elt *elt = &(*elts)[i];
+		struct rxq_elt_sp *elt = &(*elts)[i];
 
 		for (j = 0; (j != elemof(elt->bufs)); ++j) {
 			struct rte_mbuf *buf = elt->bufs[j];
@@ -1028,6 +1040,97 @@ rxq_free_elts(struct rxq *rxq)
 			if (buf != NULL)
 				rte_pktmbuf_free_seg(buf);
 		}
+	}
+	rte_free(elts);
+}
+
+static int
+rxq_alloc_elts(struct rxq *rxq, unsigned int elts_n)
+{
+	unsigned int i;
+	struct rxq_elt (*elts)[elts_n] =
+		rte_calloc_socket("RXQ elements", 1, sizeof(*elts), 0,
+				  rxq->socket);
+	int ret = 0;
+
+	if (elts == NULL) {
+		DEBUG("%p: can't allocate packets array", (void *)rxq);
+		ret = ENOMEM;
+		goto error;
+	}
+	/* For each WR (packet). */
+	for (i = 0; (i != elts_n); ++i) {
+		struct rxq_elt *elt = &(*elts)[i];
+		struct ibv_recv_wr *wr = &elt->wr;
+		struct ibv_sge *sge = &(*elts)[i].sge;
+
+		/* Configure WR. */
+		wr->wr_id = i;
+		wr->next = &(*elts)[(i + 1)].wr;
+		wr->sg_list = sge;
+		wr->num_sge = 1;
+		elt->buf = rte_pktmbuf_alloc(rxq->mp);
+		if (elt->buf == NULL) {
+			DEBUG("%p: empty mbuf pool", (void *)rxq);
+			ret = ENOMEM;
+			goto error;
+		}
+		/* Headroom is reserved by rte_pktmbuf_alloc(). */
+		assert(((uintptr_t)elt->buf->buf_addr +
+			RTE_PKTMBUF_HEADROOM) ==
+		       (uintptr_t)elt->buf->pkt.data);
+		/* Buffer is supposed to be empty. */
+		assert(rte_pktmbuf_data_len(elt->buf) == 0);
+		assert(rte_pktmbuf_pkt_len(elt->buf) == 0);
+		/* sge->addr must be able to store a pointer. */
+		assert(sizeof(sge->addr) >= sizeof(uintptr_t));
+		/* SGE keeps its headroom. */
+		sge->addr = (uintptr_t)elt->buf->pkt.data;
+		sge->length = (elt->buf->buf_len - RTE_PKTMBUF_HEADROOM);
+		sge->lkey = rxq->mr->lkey;
+		/* Redundant check for tailroom. */
+		assert(sge->length == rte_pktmbuf_tailroom(elt->buf));
+	}
+	/* The last WR pointer must be NULL. */
+	(*elts)[(i - 1)].wr.next = NULL;
+	DEBUG("%p: allocated and configured %u single-segment WRs",
+	      (void *)rxq, elts_n);
+	rxq->elts_n = elts_n;
+	rxq->elts.no_sp = elts;
+	assert(ret == 0);
+	return 0;
+error:
+	if (elts != NULL) {
+		for (i = 0; (i != elemof(*elts)); ++i) {
+			struct rxq_elt *elt = &(*elts)[i];
+
+			if (elt->buf != NULL)
+				rte_pktmbuf_free_seg(elt->buf);
+		}
+		rte_free(elts);
+	}
+	DEBUG("%p: failed, freed everything", (void *)rxq);
+	assert(ret != 0);
+	return ret;
+}
+
+static void
+rxq_free_elts(struct rxq *rxq)
+{
+	unsigned int i;
+	unsigned int elts_n = rxq->elts_n;
+	struct rxq_elt (*elts)[elts_n] = rxq->elts.no_sp;
+
+	DEBUG("%p: freeing WRs", (void *)rxq);
+	rxq->elts_n = 0;
+	rxq->elts.no_sp = NULL;
+	if (elts == NULL)
+		return;
+	for (i = 0; (i != elemof(*elts)); ++i) {
+		struct rxq_elt *elt = &(*elts)[i];
+
+		if (elt->buf != NULL)
+			rte_pktmbuf_free_seg(elt->buf);
 	}
 	rte_free(elts);
 }
@@ -1350,7 +1453,10 @@ static void
 rxq_cleanup(struct rxq *rxq)
 {
 	DEBUG("cleaning up %p", (void *)rxq);
-	rxq_free_elts(rxq);
+	if (rxq->sp)
+		rxq_free_elts_sp(rxq);
+	else
+		rxq_free_elts(rxq);
 	if (rxq->qp != NULL) {
 		rxq_promiscuous_disable(rxq);
 		rxq_allmulticast_disable(rxq);
@@ -1365,10 +1471,13 @@ rxq_cleanup(struct rxq *rxq)
 }
 
 static uint16_t
-mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
+mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n);
+
+static uint16_t
+mlx4_rx_burst_sp(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 {
 	struct rxq *rxq = (struct rxq *)dpdk_rxq;
-	struct rxq_elt (*elts)[rxq->elts_n] = rxq->elts;
+	struct rxq_elt_sp (*elts)[rxq->elts_n] = rxq->elts.sp;
 	struct ibv_wc wcs[pkts_n];
 	struct ibv_recv_wr head;
 	struct ibv_recv_wr **next = &head.next;
@@ -1377,6 +1486,8 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	int wcs_n;
 	int i;
 
+	if (unlikely(!rxq->sp))
+		return mlx4_rx_burst(dpdk_rxq, pkts, pkts_n);
 	wcs_n = ibv_poll_cq(rxq->cq, pkts_n, wcs);
 	if (unlikely(wcs_n == 0))
 		return 0;
@@ -1391,7 +1502,7 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		struct ibv_wc *wc = &wcs[i];
 		uint64_t wr_id = wc->wr_id;
 		uint32_t len = wc->byte_len;
-		struct rxq_elt *elt = &(*elts)[wr_id];
+		struct rxq_elt_sp *elt = &(*elts)[wr_id];
 		struct ibv_recv_wr *wr = &elt->wr;
 		struct rte_mbuf *pkt_buf = NULL; /* Buffer returned in pkts. */
 		struct rte_mbuf **pkt_buf_next = &pkt_buf;
@@ -1528,6 +1639,147 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	return ret;
 }
 
+/*
+ * The following function is the same as mlx4_rx_burst_sp(), except it doesn't
+ * manage scattered packets. Improves performance when MRU is lower than the
+ * size of the first segment.
+ */
+static uint16_t
+mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
+{
+	struct rxq *rxq = (struct rxq *)dpdk_rxq;
+	struct rxq_elt (*elts)[rxq->elts_n] = rxq->elts.no_sp;
+	struct ibv_wc wcs[pkts_n];
+	struct ibv_recv_wr head;
+	struct ibv_recv_wr **next = &head.next;
+	struct ibv_recv_wr *bad_wr;
+	int ret = 0;
+	int wcs_n;
+	int i;
+
+	if (unlikely(rxq->sp))
+		return mlx4_rx_burst_sp(dpdk_rxq, pkts, pkts_n);
+	wcs_n = ibv_poll_cq(rxq->cq, pkts_n, wcs);
+	if (unlikely(wcs_n == 0))
+		return 0;
+	if (unlikely(wcs_n < 0)) {
+		DEBUG("rxq=%p, ibv_poll_cq() failed (wc_n=%d)",
+		      (void *)rxq, wcs_n);
+		return -1;
+	}
+	assert(wcs_n <= (int)pkts_n);
+	/* For each work completion. */
+	for (i = 0; (i != wcs_n); ++i) {
+		struct ibv_wc *wc = &wcs[i];
+		uint64_t wr_id = wc->wr_id;
+		uint32_t len = wc->byte_len;
+		struct rxq_elt *elt = &(*elts)[wr_id];
+		struct ibv_recv_wr *wr = &elt->wr;
+		struct rte_mbuf *seg = elt->buf;
+		struct rte_mbuf *rep;
+		uint32_t seg_headroom;
+#ifndef NDEBUG
+		uint32_t seg_tailroom;
+#endif
+
+		/* Sanity checks. */
+		assert(wr_id < rxq->elts_n);
+		assert(wr_id == wr->wr_id);
+		assert(wr->sg_list == &elt->sge);
+		assert(wr->num_sge == 1);
+		/* Link completed WRs together for repost. */
+		*next = wr;
+		next = &wr->next;
+		if (unlikely(wc->status != IBV_WC_SUCCESS)) {
+			/* Whatever, just repost the offending WR. */
+			DEBUG("rxq=%p, wr_id=%" PRIu64 ": bad work completion"
+			      " status (%d): %s",
+			      (void *)rxq, wc->wr_id, wc->status,
+			      ibv_wc_status_str(wc->status));
+#ifdef MLX4_PMD_SOFT_COUNTERS
+			/* Increase dropped packets counter. */
+			++rxq->stats.idropped;
+#endif
+			goto repost;
+		}
+		/*
+		 * Fetch initial bytes of packet descriptor into a
+		 * cacheline while allocating rep.
+		 */
+		rte_prefetch0(&seg->pkt);
+		rep = __rte_mbuf_raw_alloc(rxq->mp);
+		if (unlikely(rep == NULL)) {
+			/*
+			 * Unable to allocate a replacement mbuf,
+			 * repost WR.
+			 */
+			DEBUG("rxq=%p, wr_id=%" PRIu64 ":"
+			      " can't allocate a new mbuf",
+			      (void *)rxq, wr_id);
+			/* Increase out of memory counters. */
+			++rxq->stats.rx_nombuf;
+			++rxq->priv->dev->data->rx_mbuf_alloc_failed;
+			goto repost;
+		}
+#ifndef NDEBUG
+		else {
+			/* assert() checks below need this. */
+			rep->pkt.data_len = 0;
+		}
+#endif
+		seg_headroom = ((uintptr_t)seg->pkt.data -
+				(uintptr_t)seg->buf_addr);
+		/* We don't expect any scattered packets. */
+		assert(len <= (seg_tailroom = (seg->buf_len - seg_headroom)));
+		assert(seg_tailroom == rte_pktmbuf_tailroom(seg));
+		/* Only the first segment comes with headroom. */
+		assert(seg_headroom == RTE_PKTMBUF_HEADROOM);
+		rep->pkt.data = (void *)((uintptr_t)rep->buf_addr +
+					 seg_headroom);
+		assert(rte_pktmbuf_headroom(rep) == seg_headroom);
+		assert(rte_pktmbuf_tailroom(rep) == seg_tailroom);
+		/* Reconfigure sge to use rep instead of seg. */
+		elt->sge.addr = (uintptr_t)rep->pkt.data;
+		assert(elt->sge.length == seg_tailroom);
+		assert(elt->sge.lkey == rxq->mr->lkey);
+		elt->buf = rep;
+		/* Update seg information. */
+		seg->pkt.nb_segs = 1;
+		seg->pkt.in_port = rxq->port_id;
+		seg->pkt.pkt_len = len;
+		seg->pkt.data_len = len;
+		/* Return packet. */
+		*(pkts++) = seg;
+		++ret;
+#ifdef MLX4_PMD_SOFT_COUNTERS
+		/* Increase bytes counter. */
+		rxq->stats.ibytes += wc->byte_len;
+#endif
+	repost:
+		continue;
+	}
+	*next = NULL;
+	/* Repost WRs. */
+#ifdef DEBUG_RECV
+	DEBUG("%p: reposting %d WRs starting from %" PRIu64 " (%p)",
+	      (void *)rxq, wcs_n, wcs[0].wr_id, (void *)head.next);
+#endif
+	i = ibv_post_recv(rxq->qp, head.next, &bad_wr);
+	if (unlikely(i)) {
+		/* Inability to repost WRs is fatal. */
+		DEBUG("%p: ibv_post_recv(): failed for WR %p: %s",
+		      (void *)rxq->priv,
+		      (void *)bad_wr,
+		      strerror(i));
+		abort();
+	}
+#ifdef MLX4_PMD_SOFT_COUNTERS
+	/* Increase packets counter. */
+	rxq->stats.ipackets += ret;
+#endif
+	return ret;
+}
+
 static int
 rxq_setup(struct rte_eth_dev *dev, struct rxq *rxq, uint16_t desc,
 	  unsigned int socket, const struct rte_eth_rxconf *conf,
@@ -1544,6 +1796,7 @@ rxq_setup(struct rte_eth_dev *dev, struct rxq *rxq, uint16_t desc,
 		struct ibv_qp_attr mod;
 	} attr;
 	struct ibv_recv_wr *bad_wr;
+	struct rte_mbuf *buf;
 	int ret = 0;
 	int parent = (rxq == &priv->rxq_parent);
 
@@ -1564,7 +1817,29 @@ rxq_setup(struct rte_eth_dev *dev, struct rxq *rxq, uint16_t desc,
 		      " multiple of %d)", (void *)dev, desc);
 		return -EINVAL;
 	}
-	desc /= MLX4_PMD_SGE_WR_N;
+	/* Get mbuf length. */
+	buf = rte_pktmbuf_alloc(mp);
+	if (buf == NULL) {
+		DEBUG("%p: unable to allocate mbuf", (void *)dev);
+		return -ENOMEM;
+	}
+	tmpl.mb_len = buf->buf_len;
+	assert((rte_pktmbuf_headroom(buf) +
+		rte_pktmbuf_tailroom(buf)) == tmpl.mb_len);
+	assert(rte_pktmbuf_headroom(buf) == RTE_PKTMBUF_HEADROOM);
+	rte_pktmbuf_free(buf);
+	/*
+	 * Depending on mb_len, jumbo frames support and MRU, enable scattered
+	 * packets support for this queue.
+	 */
+	if ((dev->data->dev_conf.rxmode.jumbo_frame) &&
+	    (dev->data->dev_conf.rxmode.max_rx_pkt_len >
+	     (tmpl.mb_len - RTE_PKTMBUF_HEADROOM))) {
+		tmpl.sp = 1;
+		desc /= MLX4_PMD_SGE_WR_N;
+	}
+	DEBUG("%p: %s scattered packets support (%u WRs)",
+	      (void *)dev, (tmpl.sp ? "enabling" : "disabling"), desc);
 	/* Get mempool size. */
 	tmpl.mp_size = mp_total_size(mp);
 	/* Use the entire RX mempool as the memory region. */
@@ -1662,12 +1937,20 @@ skip_mr:
 	/* Allocate descriptors for RX queues, except for the RSS parent. */
 	if (parent)
 		goto skip_alloc;
-	if ((ret = rxq_alloc_elts(&tmpl, desc))) {
+	if (tmpl.sp)
+		ret = rxq_alloc_elts_sp(&tmpl, desc);
+	else
+		ret = rxq_alloc_elts(&tmpl, desc);
+	if (ret) {
 		DEBUG("%p: RXQ allocation failed: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
 	}
-	if ((ret = ibv_post_recv(tmpl.qp, &(*tmpl.elts)[0].wr, &bad_wr))) {
+	if ((ret = ibv_post_recv(tmpl.qp,
+				 (tmpl.sp ?
+				  &(*tmpl.elts.sp)[0].wr :
+				  &(*tmpl.elts.no_sp)[0].wr),
+				 &bad_wr))) {
 		DEBUG("%p: ibv_post_recv() failed for WR %p: %s",
 		      (void *)dev,
 		      (void *)bad_wr,
@@ -1692,7 +1975,6 @@ skip_alloc:
 	*rxq = tmpl;
 	DEBUG("%p: rxq updated with %p", (void *)rxq, (void *)&tmpl);
 	assert(ret == 0);
-	dev->rx_pkt_burst = mlx4_rx_burst;
 	return 0;
 error:
 	rxq_cleanup(&tmpl);
@@ -1738,6 +2020,11 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		DEBUG("%p: adding RX queue %p to list",
 		      (void *)dev, (void *)rxq);
 		(*priv->rxqs)[idx] = rxq;
+		/* Update receive callback. */
+		if (rxq->sp)
+			dev->rx_pkt_burst = mlx4_rx_burst_sp;
+		else
+			dev->rx_pkt_burst = mlx4_rx_burst;
 	}
 	return ret;
 }
