@@ -37,6 +37,7 @@
 #include <rte_prefetch.h>
 #include <rte_malloc.h>
 #include <rte_spinlock.h>
+#include <rte_atomic.h>
 #ifdef PEDANTIC
 #pragma GCC diagnostic error "-pedantic"
 #endif
@@ -1526,6 +1527,8 @@ mlx4_rx_burst_sp(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 
 	if (unlikely(!rxq->sp))
 		return mlx4_rx_burst(dpdk_rxq, pkts, pkts_n);
+	if (unlikely(elts == NULL)) /* See RTE_DEV_CMD_SET_MTU. */
+		return 0;
 	wcs_n = ibv_poll_cq(rxq->cq, pkts_n, wcs);
 	if (unlikely(wcs_n == 0))
 		return 0;
@@ -2673,6 +2676,8 @@ mlx4_dev_control(struct rte_eth_dev *dev, uint32_t command, void *arg)
 		struct rte_dev_ethtool_gsettings gset;
 	} *data = arg;
 	int ret;
+	unsigned int i;
+	int ok;
 
 	priv_lock(priv);
 	switch (command) {
@@ -2681,6 +2686,67 @@ mlx4_dev_control(struct rte_eth_dev *dev, uint32_t command, void *arg)
 		ret = 0;
 		break;
 	case RTE_DEV_CMD_SET_MTU:
+		dev->rx_pkt_burst = removed_rx_burst;
+		dev->data->dev_conf.rxmode.jumbo_frame =
+			(data->u16 > ETHER_MAX_LEN);
+		dev->data->dev_conf.rxmode.max_rx_pkt_len = data->u16;
+		/* Make sure everyone has left mlx4_rx_burst(). */
+		rte_wmb();
+		usleep(1000);
+		/* Reconfigure each RX queue. */
+		ok = 0;
+		for (i = 0; (i != priv->rxqs_n); ++i) {
+			struct rxq *rxq = (*priv->rxqs)[i];
+			uint16_t desc;
+			unsigned int socket;
+			struct rte_eth_rxconf *conf;
+			struct rte_mempool *mp;
+
+			if (rxq == NULL)
+				continue;
+			desc = (rxq->elts_n *
+				(rxq->sp ? MLX4_PMD_SGE_WR_N : 1));
+			socket = rxq->socket;
+			conf = NULL; /* Currently unused. */
+			mp = rxq->mp;
+			rxq_cleanup(rxq);
+			if (rxq_setup(dev, rxq, desc, socket, conf, mp)) {
+				/* This queue is now dead, with no way to
+				 * recover. Just prevent mlx4_rx_burst() from
+				 * crashing during the next call by enabling
+				 * SP mode. mlx4_rx_burst_sp() has an
+				 * additional check for this case. */
+				rxq->sp = 1;
+				continue;
+			}
+			/* Reenable non-RSS queue attributes. No need to check
+			 * for errors at this stage. */
+			if (!priv->rss) {
+				rxq_mac_addrs_add(rxq);
+				if (priv->promisc)
+					rxq_promiscuous_enable(rxq);
+				if (priv->allmulti)
+					rxq_allmulticast_enable(rxq);
+			}
+			if (!rxq->sp) {
+				if (data->u16 <= (rxq->mb_len -
+						  RTE_PKTMBUF_HEADROOM))
+					ok |= 1;
+			}
+			else {
+				if (data->u16 <= ((rxq->mb_len *
+						   MLX4_PMD_SGE_WR_N) -
+						  RTE_PKTMBUF_HEADROOM))
+					ok |= 2;
+			}
+		}
+		/* Burst functions can now be called again. */
+		if (ok & 2)
+			dev->rx_pkt_burst = mlx4_rx_burst_sp;
+		else
+			dev->rx_pkt_burst = mlx4_rx_burst;
+		if (!ok)
+			return -EINVAL;
 		priv->mtu = data->u16;
 		ret = 0;
 		break;
@@ -3099,7 +3165,7 @@ mlx4_generic_init(struct eth_driver *drv, struct rte_eth_dev *dev, int probe)
 	priv->port_attr = port_attr;
 	priv->port = port;
 	priv->pd = pd;
-	priv->mtu = 1500; /* Unused MTU. */
+	priv->mtu = ETHER_MTU;
 #if RSS_SUPPORT
 	priv->hw_qpg = !!(device_attr.device_cap_flags & IBV_DEVICE_QPG);
 	priv->hw_tss = !!(device_attr.device_cap_flags & IBV_DEVICE_UD_TSS);
