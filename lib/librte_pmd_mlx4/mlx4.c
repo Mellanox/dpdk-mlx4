@@ -36,6 +36,7 @@
 #include <rte_version.h>
 #include <rte_prefetch.h>
 #include <rte_malloc.h>
+#include <rte_spinlock.h>
 #ifdef PEDANTIC
 #pragma GCC diagnostic error "-pedantic"
 #endif
@@ -216,7 +217,20 @@ struct priv {
 	unsigned int txqs_n; /* TX queues array size. */
 	struct rxq *(*rxqs)[]; /* RX queues. */
 	struct txq *(*txqs)[]; /* TX queues. */
+	rte_spinlock_t lock; /* Lock for control functions. */
 };
+
+static void
+priv_lock(struct priv *priv)
+{
+	rte_spinlock_lock(&priv->lock);
+}
+
+static void
+priv_unlock(struct priv *priv)
+{
+	rte_spinlock_unlock(&priv->lock);
+}
 
 /* Device configuration. */
 
@@ -289,7 +303,13 @@ dev_configure(struct rte_eth_dev *dev)
 static int
 mlx4_dev_configure(struct rte_eth_dev *dev)
 {
-	return dev_configure(dev);
+	struct priv *priv = dev->data->dev_private;
+	int ret;
+
+	priv_lock(priv);
+	ret = dev_configure(dev);
+	priv_unlock(priv);
+	return ret;
 }
 
 #else /* BUILT_DPDK_VERSION */
@@ -300,15 +320,20 @@ mlx4_dev_configure(struct rte_eth_dev *dev, uint16_t rxqs_n, uint16_t txqs_n)
 	struct priv *priv = dev->data->dev_private;
 	struct rxq *(*rxqs)[rxqs_n] = NULL;
 	struct txq *(*txqs)[txqs_n] = NULL;
+	int ret;
 
-	if ((rxqs_n == priv->rxqs_n) && (txqs_n == priv->txqs_n))
+	priv_lock(priv);
+	if ((rxqs_n == priv->rxqs_n) && (txqs_n == priv->txqs_n)) {
+		priv_unlock(priv);
 		return 0;
+	}
 	/* Changing the number of RX or TX queues with DPDK < 1.3.0 is
 	 * unsafe, thus not supported. */
 	if ((priv->rxqs_n) || (priv->txqs_n)) {
 		DEBUG("%p: changing the number of RX or TX queues is"
 		      " not supported",
 		      (void *)dev);
+		priv_unlock(priv);
 		return -EEXIST;
 	}
 	assert(priv->rxqs == NULL);
@@ -320,13 +345,16 @@ mlx4_dev_configure(struct rte_eth_dev *dev, uint16_t rxqs_n, uint16_t txqs_n)
 		      (void *)dev, strerror(errno));
 		rte_free(rxqs);
 		rte_free(txqs);
+		priv_unlock(priv);
 		return -errno;
 	}
 	dev->data->nb_rx_queues = rxqs_n;
 	dev->data->rx_queues = (dpdk_rxq_t **)rxqs;
 	dev->data->nb_tx_queues = txqs_n;
 	dev->data->tx_queues = (dpdk_txq_t **)txqs;
-	return dev_configure(dev);
+	ret = dev_configure(dev);
+	priv_unlock(priv);
+	return ret;
 }
 
 #endif /* BUILT_DPDK_VERSION */
@@ -861,18 +889,22 @@ mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	struct txq *txq = (*priv->txqs)[idx];
 	int ret;
 
+	priv_lock(priv);
 	DEBUG("%p: configuring queue %u for %u descriptors",
 	      (void *)dev, idx, desc);
 	if (idx >= priv->txqs_n) {
 		DEBUG("%p: queue index out of range (%u >= %u)",
 		      (void *)dev, idx, priv->txqs_n);
+		priv_unlock(priv);
 		return -EOVERFLOW;
 	}
 	if (txq != NULL) {
 		DEBUG("%p: reusing already allocated queue index %u (%p)",
 		      (void *)dev, idx, (void *)txq);
-		if (priv->started)
+		if (priv->started) {
+			priv_unlock(priv);
 			return -EEXIST;
+		}
 		(*priv->txqs)[idx] = NULL;
 		txq_cleanup(txq);
 	}
@@ -881,6 +913,7 @@ mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		if (txq == NULL) {
 			DEBUG("%p: unable to allocate queue index %u: %s",
 			      (void *)dev, idx, strerror(errno));
+			priv_unlock(priv);
 			return -errno;
 		}
 	}
@@ -894,6 +927,7 @@ mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		/* Update send callback. */
 		dev->tx_pkt_burst = mlx4_tx_burst;
 	}
+	priv_unlock(priv);
 	return ret;
 }
 
@@ -909,6 +943,7 @@ mlx4_tx_queue_release(dpdk_txq_t *dpdk_txq)
 	if (txq == NULL)
 		return;
 	priv = txq->priv;
+	priv_lock(priv);
 	for (i = 0; (i != priv->txqs_n); ++i)
 		if ((*priv->txqs)[i] == txq) {
 			DEBUG("%p: removing TX queue %p from list",
@@ -918,6 +953,7 @@ mlx4_tx_queue_release(dpdk_txq_t *dpdk_txq)
 		}
 	txq_cleanup(txq);
 	rte_free(txq);
+	priv_unlock(priv);
 }
 
 #endif /* BUILT_DPDKP_VERSION */
@@ -1993,18 +2029,22 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	struct rxq *rxq = (*priv->rxqs)[idx];
 	int ret;
 
+	priv_lock(priv);
 	DEBUG("%p: configuring queue %u for %u descriptors",
 	      (void *)dev, idx, desc);
 	if (idx >= priv->rxqs_n) {
 		DEBUG("%p: queue index out of range (%u >= %u)",
 		      (void *)dev, idx, priv->rxqs_n);
+		priv_unlock(priv);
 		return -EOVERFLOW;
 	}
 	if (rxq != NULL) {
 		DEBUG("%p: reusing already allocated queue index %u (%p)",
 		      (void *)dev, idx, (void *)rxq);
-		if (priv->started)
+		if (priv->started) {
+			priv_unlock(priv);
 			return -EEXIST;
+		}
 		(*priv->rxqs)[idx] = NULL;
 		rxq_cleanup(rxq);
 	}
@@ -2013,6 +2053,7 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		if (rxq == NULL) {
 			DEBUG("%p: unable to allocate queue index %u: %s",
 			      (void *)dev, idx, strerror(errno));
+			priv_unlock(priv);
 			return -errno;
 		}
 	}
@@ -2029,6 +2070,7 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		else
 			dev->rx_pkt_burst = mlx4_rx_burst;
 	}
+	priv_unlock(priv);
 	return ret;
 }
 
@@ -2044,6 +2086,7 @@ mlx4_rx_queue_release(dpdk_rxq_t *dpdk_rxq)
 	if (rxq == NULL)
 		return;
 	priv = rxq->priv;
+	priv_lock(priv);
 	assert(rxq != &priv->rxq_parent);
 	for (i = 0; (i != priv->rxqs_n); ++i)
 		if ((*priv->rxqs)[i] == rxq) {
@@ -2054,6 +2097,7 @@ mlx4_rx_queue_release(dpdk_rxq_t *dpdk_rxq)
 		}
 	rxq_cleanup(rxq);
 	rte_free(rxq);
+	priv_unlock(priv);
 }
 
 #endif /* BUILT_DPDK_VERSION */
@@ -2067,8 +2111,11 @@ mlx4_dev_start(struct rte_eth_dev *dev)
 	unsigned int r;
 	struct rxq *rxq;
 
-	if (priv->started)
+	priv_lock(priv);
+	if (priv->started) {
+		priv_unlock(priv);
 		return 0;
+	}
 	DEBUG("%p: attaching configured flows to all RX queues", (void *)dev);
 	priv->started = 1;
 	if (priv->rss) {
@@ -2105,6 +2152,7 @@ mlx4_dev_start(struct rte_eth_dev *dev)
 		return -1;
 	}
 	while ((--r) && ((rxq = (*priv->rxqs)[++i]), i));
+	priv_unlock(priv);
 	return 0;
 }
 
@@ -2117,8 +2165,11 @@ mlx4_dev_stop(struct rte_eth_dev *dev)
 	unsigned int r;
 	struct rxq *rxq;
 
-	if (!priv->started)
+	priv_lock(priv);
+	if (!priv->started) {
+		priv_unlock(priv);
 		return;
+	}
 	DEBUG("%p: detaching flows from all RX queues", (void *)dev);
 	priv->started = 0;
 	if (priv->rss) {
@@ -2139,6 +2190,7 @@ mlx4_dev_stop(struct rte_eth_dev *dev)
 		rxq_mac_addrs_del(rxq);
 	}
 	while ((--r) && ((rxq = (*priv->rxqs)[++i]), i));
+	priv_unlock(priv);
 }
 
 #if BUILT_DPDK_VERSION < DPDK_VERSION(1, 3, 0)
@@ -2174,6 +2226,7 @@ mlx4_dev_close(struct rte_eth_dev *dev)
 	void *tmp;
 	unsigned int i;
 
+	priv_lock(priv);
 	DEBUG("%p: closing device \"%s\"",
 	      (void *)dev, priv->ctx->device->name);
 	/* Prevent crashes when queues are still in use. This is unfortunately
@@ -2234,15 +2287,17 @@ mlx4_dev_close(struct rte_eth_dev *dev)
 	assert(priv->pd != NULL);
 	claim_zero(ibv_dealloc_pd(priv->pd));
 	claim_zero(ibv_close_device(priv->ctx));
+	priv_unlock(priv);
 	memset(priv, 0, sizeof(*priv));
 }
 
 static void
 mlx4_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *info)
 {
-	const struct priv *priv = dev->data->dev_private;
+	struct priv *priv = dev->data->dev_private;
 	unsigned int max;
 
+	priv_lock(priv);
 	/* FIXME: we should ask the device for these values. */
 	info->min_rx_bufsize = 32;
 	info->max_rx_pktlen = 65536;
@@ -2262,15 +2317,17 @@ mlx4_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *info)
 	info->max_rx_queues = max;
 	info->max_tx_queues = max;
 	info->max_mac_addrs = elemof(priv->mac);
+	priv_unlock(priv);
 }
 
 static void
 mlx4_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 {
-	const struct priv *priv = dev->data->dev_private;
+	struct priv *priv = dev->data->dev_private;
 	struct rte_eth_stats tmp = { .ipackets = 0 };
 	unsigned int i;
 
+	priv_lock(priv);
 	/* Add software counters. */
 	for (i = 0; (i != priv->rxqs_n); ++i) {
 		if ((*priv->rxqs)[i] == NULL)
@@ -2291,14 +2348,16 @@ mlx4_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 	/* FIXME: retrieve and add hardware counters. */
 #endif
 	*stats = tmp;
+	priv_unlock(priv);
 }
 
 static void
 mlx4_stats_reset(struct rte_eth_dev *dev)
 {
-	const struct priv *priv = dev->data->dev_private;
+	struct priv *priv = dev->data->dev_private;
 	unsigned int i;
 
+	priv_lock(priv);
 	for (i = 0; (i != priv->rxqs_n); ++i) {
 		if ((*priv->rxqs)[i] == NULL)
 			continue;
@@ -2314,6 +2373,7 @@ mlx4_stats_reset(struct rte_eth_dev *dev)
 #ifndef MLX4_PMD_SOFT_COUNTERS
 	/* FIXME: reset hardware counters. */
 #endif
+	priv_unlock(priv);
 }
 
 #ifdef DPDK_6WIND
@@ -2322,58 +2382,74 @@ static void
 mlx4_rxq_stats_get(struct rte_eth_dev *dev, uint16_t idx,
 		   struct rte_rxq_stats *stats)
 {
-	const struct priv *priv = dev->data->dev_private;
+	struct priv *priv = dev->data->dev_private;
 
+	priv_lock(priv);
 	assert(idx < priv->rxqs_n);
-	if ((*priv->rxqs)[idx] == NULL)
+	if ((*priv->rxqs)[idx] == NULL) {
+		priv_unlock(priv);
 		return;
+	}
 	*stats = (*priv->rxqs)[idx]->stats;
 #ifndef MLX4_PMD_SOFT_COUNTERS
 	/* FIXME: add hardware counters. */
 #endif
+	priv_unlock(priv);
 }
 
 static void
 mlx4_txq_stats_get(struct rte_eth_dev *dev, uint16_t idx,
 		   struct rte_txq_stats *stats)
 {
-	const struct priv *priv = dev->data->dev_private;
+	struct priv *priv = dev->data->dev_private;
 
+	priv_lock(priv);
 	assert(idx < priv->txqs_n);
-	if ((*priv->txqs)[idx] == NULL)
+	if ((*priv->txqs)[idx] == NULL) {
+		priv_unlock(priv);
 		return;
+	}
 	*stats = (*priv->txqs)[idx]->stats;
 #ifndef MLX4_PMD_SOFT_COUNTERS
 	/* FIXME: add hardware counters. */
 #endif
+	priv_unlock(priv);
 }
 
 static void
 mlx4_rxq_stats_reset(struct rte_eth_dev *dev, uint16_t idx)
 {
-	const struct priv *priv = dev->data->dev_private;
+	struct priv *priv = dev->data->dev_private;
 
+	priv_lock(priv);
 	assert(idx < priv->rxqs_n);
-	if ((*priv->rxqs)[idx] == NULL)
+	if ((*priv->rxqs)[idx] == NULL) {
+		priv_unlock(priv);
 		return;
+	}
 	(*priv->rxqs)[idx]->stats = (struct rte_rxq_stats){ .ipackets = 0 };
 #ifndef MLX4_PMD_SOFT_COUNTERS
 	/* FIXME: reset hardware counters. */
 #endif
+	priv_unlock(priv);
 }
 
 static void
 mlx4_txq_stats_reset(struct rte_eth_dev *dev, uint16_t idx)
 {
-	const struct priv *priv = dev->data->dev_private;
+	struct priv *priv = dev->data->dev_private;
 
+	priv_lock(priv);
 	assert(idx < priv->txqs_n);
-	if ((*priv->txqs)[idx] == NULL)
+	if ((*priv->txqs)[idx] == NULL) {
+		priv_unlock(priv);
 		return;
+	}
 	(*priv->txqs)[idx]->stats = (struct rte_txq_stats){ .opackets = 0 };
 #ifndef MLX4_PMD_SOFT_COUNTERS
 	/* FIXME: reset hardware counters. */
 #endif
+	priv_unlock(priv);
 }
 
 #endif /* DPDK_6WIND */
@@ -2383,15 +2459,18 @@ mlx4_mac_addr_remove(struct rte_eth_dev *dev, uint32_t index)
 {
 	struct priv *priv = dev->data->dev_private;
 
+	priv_lock(priv);
 	DEBUG("%p: removing MAC address from index %" PRIu32,
 	      (void *)dev, index);
 	if (index >= MLX4_MAX_MAC_ADDRESSES)
-		return;
+		goto end;
 	/* Refuse to remove the broadcast address, this one is special. */
 	if (!memcmp(priv->mac[index].addr_bytes, "\xff\xff\xff\xff\xff\xff",
 		    ETHER_ADDR_LEN))
-		return;
+		goto end;
 	priv_mac_addr_del(priv, index);
+end:
+	priv_unlock(priv);
 }
 
 static void
@@ -2401,17 +2480,20 @@ mlx4_mac_addr_add(struct rte_eth_dev *dev, struct ether_addr *mac_addr,
 	struct priv *priv = dev->data->dev_private;
 
 	(void)vmdq;
+	priv_lock(priv);
 	DEBUG("%p: adding MAC address at index %" PRIu32,
 	      (void *)dev, index);
 	if (index >= MLX4_MAX_MAC_ADDRESSES)
-		return;
+		goto end;
 	/* Refuse to add the broadcast address, this one is special. */
 	if (!memcmp(mac_addr->addr_bytes, "\xff\xff\xff\xff\xff\xff",
 		    ETHER_ADDR_LEN))
-		return;
+		goto end;
 	priv_mac_addr_add(priv, index,
 			  (const uint8_t (*)[ETHER_ADDR_LEN])
 			  mac_addr->addr_bytes);
+end:
+	priv_unlock(priv);
 }
 
 static void
@@ -2421,15 +2503,20 @@ mlx4_promiscuous_enable(struct rte_eth_dev *dev)
 	unsigned int i;
 	int ret;
 
-	if (priv->promisc)
+	priv_lock(priv);
+	if (priv->promisc) {
+		priv_unlock(priv);
 		return;
+	}
 	/* If device isn't started, this is all we need to do. */
 	if (!priv->started)
 		goto end;
 	if (priv->rss) {
 		ret = rxq_promiscuous_enable(&priv->rxq_parent);
-		if (ret)
+		if (ret) {
+			priv_unlock(priv);
 			return;
+		}
 		goto end;
 	}
 	for (i = 0; (i != priv->rxqs_n); ++i) {
@@ -2442,10 +2529,12 @@ mlx4_promiscuous_enable(struct rte_eth_dev *dev)
 		while (i != 0)
 			if ((*priv->rxqs)[--i] != NULL)
 				rxq_promiscuous_disable((*priv->rxqs)[i]);
+		priv_unlock(priv);
 		return;
 	}
 end:
 	priv->promisc = 1;
+	priv_unlock(priv);
 }
 
 static void
@@ -2454,8 +2543,11 @@ mlx4_promiscuous_disable(struct rte_eth_dev *dev)
 	struct priv *priv = dev->data->dev_private;
 	unsigned int i;
 
-	if (!priv->promisc)
+	priv_lock(priv);
+	if (!priv->promisc) {
+		priv_unlock(priv);
 		return;
+	}
 	if (priv->rss) {
 		rxq_promiscuous_disable(&priv->rxq_parent);
 		goto end;
@@ -2465,6 +2557,7 @@ mlx4_promiscuous_disable(struct rte_eth_dev *dev)
 			rxq_promiscuous_disable((*priv->rxqs)[i]);
 end:
 	priv->promisc = 0;
+	priv_unlock(priv);
 }
 
 static void
@@ -2474,15 +2567,20 @@ mlx4_allmulticast_enable(struct rte_eth_dev *dev)
 	unsigned int i;
 	int ret;
 
-	if (priv->allmulti)
+	priv_lock(priv);
+	if (priv->allmulti) {
+		priv_unlock(priv);
 		return;
+	}
 	/* If device isn't started, this is all we need to do. */
 	if (!priv->started)
 		goto end;
 	if (priv->rss) {
 		ret = rxq_allmulticast_enable(&priv->rxq_parent);
-		if (ret)
+		if (ret) {
+			priv_unlock(priv);
 			return;
+		}
 		goto end;
 	}
 	for (i = 0; (i != priv->rxqs_n); ++i) {
@@ -2495,10 +2593,12 @@ mlx4_allmulticast_enable(struct rte_eth_dev *dev)
 		while (i != 0)
 			if ((*priv->rxqs)[--i] != NULL)
 				rxq_allmulticast_disable((*priv->rxqs)[i]);
+		priv_unlock(priv);
 		return;
 	}
 end:
 	priv->allmulti = 1;
+	priv_unlock(priv);
 }
 
 static void
@@ -2507,8 +2607,11 @@ mlx4_allmulticast_disable(struct rte_eth_dev *dev)
 	struct priv *priv = dev->data->dev_private;
 	unsigned int i;
 
-	if (!priv->allmulti)
+	priv_lock(priv);
+	if (!priv->allmulti) {
+		priv_unlock(priv);
 		return;
+	}
 	if (priv->rss) {
 		rxq_allmulticast_disable(&priv->rxq_parent);
 		goto end;
@@ -2518,6 +2621,7 @@ mlx4_allmulticast_disable(struct rte_eth_dev *dev)
 			rxq_allmulticast_disable((*priv->rxqs)[i]);
 end:
 	priv->allmulti = 0;
+	priv_unlock(priv);
 }
 
 static int
@@ -2531,9 +2635,11 @@ mlx4_link_update(struct rte_eth_dev *dev, int wait_to_complete)
 	};
 
 	(void)wait_to_complete;
+	priv_lock(priv);
 	DEBUG("%p", (void *)dev);
 	if ((errno = ibv_query_port(priv->ctx, priv->port, &port_attr))) {
 		DEBUG("port query failed: %s", strerror(errno));
+		priv_unlock(priv);
 		return -1;
 	}
 	dev->data->dev_link = (struct rte_eth_link){
@@ -2547,9 +2653,11 @@ mlx4_link_update(struct rte_eth_dev *dev, int wait_to_complete)
 	if (memcmp(&port_attr, &priv->port_attr, sizeof(port_attr))) {
 		/* Link status changed. */
 		priv->port_attr = port_attr;
+		priv_unlock(priv);
 		return 0;
 	}
 	/* Link status is still the same. */
+	priv_unlock(priv);
 	return -1;
 }
 
@@ -2564,14 +2672,18 @@ mlx4_dev_control(struct rte_eth_dev *dev, uint32_t command, void *arg)
 		struct rte_dev_ethtool_drvinfo info;
 		struct rte_dev_ethtool_gsettings gset;
 	} *data = arg;
+	int ret;
 
+	priv_lock(priv);
 	switch (command) {
 	case RTE_DEV_CMD_GET_MTU:
 		data->u16 = priv->mtu;
-		return 0;
+		ret = 0;
+		break;
 	case RTE_DEV_CMD_SET_MTU:
 		priv->mtu = data->u16;
-		return 0;
+		ret = 0;
+		break;
 	case RTE_DEV_CMD_ETHTOOL_GET_DRVINFO:
 		snprintf(data->info.driver, sizeof(data->info.driver),
 			 "mlx4_pmd");
@@ -2581,7 +2693,8 @@ mlx4_dev_control(struct rte_eth_dev *dev, uint32_t command, void *arg)
 			 (unsigned int)dev->pci_dev->addr.bus,
 			 (unsigned int)dev->pci_dev->addr.devid,
 			 (unsigned int)dev->pci_dev->addr.function);
-		return 0;
+		ret = 0;
+		break;
 	case RTE_DEV_CMD_ETHTOOL_GET_SETTINGS:
 		mlx4_link_update(dev, 0);
 		/* phy_addr not available. */
@@ -2596,16 +2709,19 @@ mlx4_dev_control(struct rte_eth_dev *dev, uint32_t command, void *arg)
 		data->gset.duplex = dev->data->dev_link.link_duplex;
 		data->gset.status = dev->data->dev_link.link_status;
 		data->gset.autoneg = RTE_AUTONEG_ENABLE;
-		return 0;
+		ret = 0;
+		break;
 	case RTE_DEV_CMD_ETHTOOL_GET_SSET_COUNT:
 	case RTE_DEV_CMD_ETHTOOL_GET_STRINGS:
 	case RTE_DEV_CMD_ETHTOOL_GET_STATS:
 	case RTE_DEV_CMD_ETHTOOL_GET_PAUSEPARAM:
 	case RTE_DEV_CMD_ETHTOOL_SET_PAUSEPARAM:
 	default:
+		ret = ENOTSUP;
 		break;
 	}
-	return -ENOTSUP;
+	priv_unlock(priv);
+	return -ret;
 }
 
 #endif /* DPDK_6WIND */
@@ -2693,7 +2809,11 @@ vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 static void
 mlx4_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 {
+	struct priv *priv = dev->data->dev_private;
+
+	priv_lock(priv);
 	vlan_filter_set(dev, vlan_id, on);
+	priv_unlock(priv);
 }
 
 #else /* BUILT_DPDK_VERSION */
@@ -2701,7 +2821,13 @@ mlx4_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 static int
 mlx4_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 {
-	return vlan_filter_set(dev, vlan_id, on);
+	struct priv *priv = dev->data->dev_private;
+	int ret;
+
+	priv_lock(priv);
+	ret = vlan_filter_set(dev, vlan_id, on);
+	priv_unlock(priv);
+	return ret;
 }
 
 #endif /* BUILT_DPDK_VERSION */
