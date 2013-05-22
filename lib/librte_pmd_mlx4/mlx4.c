@@ -846,7 +846,6 @@ txq_setup(struct rte_eth_dev *dev, struct txq *txq, uint16_t desc,
 	*txq = tmpl;
 	DEBUG("%p: txq updated with %p", (void *)txq, (void *)&tmpl);
 	assert(ret == 0);
-	dev->tx_pkt_burst = mlx4_tx_burst;
 	return 0;
 error:
 	txq_cleanup(&tmpl);
@@ -891,6 +890,8 @@ mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		DEBUG("%p: adding TX queue %p to list",
 		      (void *)dev, (void *)txq);
 		(*priv->txqs)[idx] = txq;
+		/* Update send callback. */
+		dev->tx_pkt_burst = mlx4_tx_burst;
 	}
 	return ret;
 }
