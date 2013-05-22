@@ -869,19 +869,20 @@ mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		return -EOVERFLOW;
 	}
 	if (txq != NULL) {
-		DEBUG("%p: queue index %u is already allocated (%p)",
+		DEBUG("%p: reusing already allocated queue index %u (%p)",
 		      (void *)dev, idx, (void *)txq);
 		if (priv->started)
 			return -EEXIST;
 		(*priv->txqs)[idx] = NULL;
 		txq_cleanup(txq);
-		rte_free(txq);
 	}
-	txq = rte_calloc_socket("TXQ", 1, sizeof(*txq), 0, socket);
-	if (txq == NULL) {
-		DEBUG("%p: unable to allocate queue index %u: %s",
-		      (void *)dev, idx, strerror(errno));
-		return -errno;
+	else {
+		txq = rte_calloc_socket("TXQ", 1, sizeof(*txq), 0, socket);
+		if (txq == NULL) {
+			DEBUG("%p: unable to allocate queue index %u: %s",
+			      (void *)dev, idx, strerror(errno));
+			return -errno;
+		}
 	}
 	ret = txq_setup(dev, txq, desc, socket, conf);
 	if (ret)
@@ -2000,19 +2001,20 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		return -EOVERFLOW;
 	}
 	if (rxq != NULL) {
-		DEBUG("%p: queue index %u is already allocated (%p)",
+		DEBUG("%p: reusing already allocated queue index %u (%p)",
 		      (void *)dev, idx, (void *)rxq);
 		if (priv->started)
 			return -EEXIST;
 		(*priv->rxqs)[idx] = NULL;
 		rxq_cleanup(rxq);
-		rte_free(rxq);
 	}
-	rxq = rte_calloc_socket("RXQ", 1, sizeof(*rxq), 0, socket);
-	if (rxq == NULL) {
-		DEBUG("%p: unable to allocate queue index %u: %s",
-		      (void *)dev, idx, strerror(errno));
-		return -errno;
+	else {
+		rxq = rte_calloc_socket("RXQ", 1, sizeof(*rxq), 0, socket);
+		if (rxq == NULL) {
+			DEBUG("%p: unable to allocate queue index %u: %s",
+			      (void *)dev, idx, strerror(errno));
+			return -errno;
+		}
 	}
 	ret = rxq_setup(dev, rxq, desc, socket, conf, mp);
 	if (ret)
