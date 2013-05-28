@@ -24,7 +24,9 @@
 #define MLX4_MAX_VLAN_IDS 127
 
 /* Maximum number of Scatter/Gather Elements per Work Request. */
+#ifndef MLX4_PMD_SGE_WR_N
 #define MLX4_PMD_SGE_WR_N 4
+#endif
 
 /*
  * Maximum number of cached Memory Pools (MPs) per TX queue. Each RTE MP

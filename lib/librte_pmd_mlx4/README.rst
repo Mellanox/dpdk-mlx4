@@ -130,6 +130,15 @@ Configuration/compilation example::
  [...]
  Build complete
 
+The following macros can be overridden in the configuration file or on the
+command-line:
+
+- ``CONFIG_RTE_LIBRTE_MLX4_DEBUG``: if ``y``, enable driver debugging.
+- ``CONFIG_RTE_LIBRTE_MLX4_SGE_WR_N`` (default: ``4``): change the maximum
+  number of scatter/gather elements per work request. The minimum value is
+  1, which disables support for segmented packets and jumbo frames with a
+  size greater than a single segment for both TX and RX.
+
 Compilation (external)
 ----------------------
 
@@ -158,6 +167,10 @@ The following macros can be overridden on the command-line:
   files.
 - ``DEBUG``: if ``1``, enable driver debugging.
 - ``DPDK_6WIND``: if ``1``, enable 6WIND DPDK extensions.
+- ``MLX4_PMD_SGE_WR_N`` (default: ``4``): change the maximum number of
+  scatter/gather elements per work request. The minimum value is 1, which
+  disables support for segmented packets and jumbo frames with a size
+  greater than a single segment for both TX and RX.
 
 Testing
 =======

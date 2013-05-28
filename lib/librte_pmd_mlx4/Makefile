@@ -16,6 +16,9 @@ CFLAGS += -pedantic -g -UNDEBUG -DPEDANTIC
 else
 CFLAGS += -DNDEBUG -UPEDANTIC
 endif
+ifdef CONFIG_RTE_LIBRTE_MLX4_SGE_WR_N
+CFLAGS += -DMLX4_PMD_SGE_WR_N=$(CONFIG_RTE_LIBRTE_MLX4_SGE_WR_N)
+endif
 
 # DPDK specifies -march=native by default which implicitly uses -mtune=native.
 # Forcing -mtune=generic instead yields better performance.
@@ -49,6 +52,10 @@ ifeq ($(DEBUG),1)
 CFLAGS += -pedantic -UNDEBUG -DPEDANTIC
 else
 CFLAGS += -DNDEBUG -UPEDANTIC
+endif
+
+ifdef MLX4_PMD_SGE_WR_N
+CFLAGS += -DMLX4_PMD_SGE_WR_N=$(MLX4_PMD_SGE_WR_N)
 endif
 
 LDFLAGS += -shared
