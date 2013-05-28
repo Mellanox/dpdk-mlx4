@@ -26,13 +26,12 @@ This driver is based on ``libibverbs`` and currently supports:
 - DPDK 1.2.2 (6WIND or Intel).
 - DPDK 1.3.0 (6WIND or Intel).
 
-Unsupported features:
+Known limitations:
 
-- Promiscuous mode.
-- Broadcast frames (only partially supported).
-- VLAN filtering doesn't work (not interpreted in kernel driver).
-- Hardware counters.
+- Multiple RX VLAN filters can be configured, but only the first one works
+  properly.
 - RSS hash key and options cannot be modified.
+- Hardware counters aren't implemented.
 
 Installation
 ============
@@ -40,7 +39,7 @@ Installation
 Requirements
 ------------
 
-A Linux host with either a full installation of Mellanox OFED (updated
+A Linux host with either a full installation of Mellanox OFED 2.0 (updated
 kernel drivers and libraries), or only following components:
 
 - Mellanox OFA kernel drivers (``mlnx-ofa_kernel``).
@@ -52,8 +51,8 @@ support and compiled in the following order:
 
 - ``mlnx-ofa_kernel-2.0`` requires a patch for RSS support.
 - ``libibverbs-1.1.6mlnx1`` requires a patch for RSS support.
-- ``libmlx4-1.0.4mlnx1`` doesn't require any patch but must be recompiled
-  after patching ``libibverbs``.
+- ``libmlx4-1.0.4mlnx1`` can be patched for better performance and must be
+  recompiled anyway after patching ``libibverbs`` for RSS support.
 - Other ``libibverbs`` dependencies (not currently used by
   ``librte_pmd_mlx4``) may also need recompilation, but this is out of the
   scope of this document.
@@ -105,13 +104,13 @@ IGB and IXGBE drivers (``librte_pmd_igb`` and ``librte_pmd_ixgbe``).
  # patch -p2 < ~/0003-pci-allow-drivers-to-be-bound-several-times-to-the-s.patch
  [...]
  # cd lib
- # tar xzf ~/librte_pmd_mlx4-1.9.tar.gz
- # ln -s librte_pmd_mlx4-1.9 librte_pmd_mlx4
+ # tar xzf ~/librte_pmd_mlx4-1.10.tar.gz
+ # ln -s librte_pmd_mlx4-1.10 librte_pmd_mlx4
  # ls -ld librte_pmd_*
- drwxr-xr-x. 3 root root 4096 Dec 17 12:09 librte_pmd_e1000
- drwxr-xr-x. 3 root root 4096 Dec 17 12:09 librte_pmd_ixgbe
- lrwxrwxrwx. 1 root root   19 Apr 15 15:49 librte_pmd_mlx4 -> librte_pmd_mlx4-1.9
- drwxr-xr-x. 2 root root 4096 Apr 15 15:42 librte_pmd_mlx4-1.9
+ drwxr-xr-x 3 root root 4096 Dec 17 12:09 librte_pmd_e1000
+ drwxr-xr-x 3 root root 4096 Dec 17 12:09 librte_pmd_ixgbe
+ lrwxrwxrwx 1 root root   20 May 27 13:49 librte_pmd_mlx4 -> librte_pmd_mlx4-1.10
+ drwxrwxr-x 2 root root 4096 May 23 11:48 librte_pmd_mlx4-1.10
 
 After this, the DPDK is ready to be configured/compiled and installed. Please
 refer to its installation procedure. The configuration templates include
@@ -142,8 +141,8 @@ object. The DPDK source tree is only required for its headers.
 Once the DPDK is compiled, ``librte_pmd_mlx4`` can be unpacked elsewhere and
 compiled::
 
- # tar xzf librte_pmd_mlx4-1.9.tar.gz
- # cd librte_pmd_mlx4-1.9
+ # tar xzf librte_pmd_mlx4-1.10.tar.gz
+ # cd librte_pmd_mlx4-1.10
  # make clean
  rm -f librte_pmd_mlx4.so mlx4.o
  # make RTE_SDK=~/DPDK DPDK_6WIND=1
@@ -160,92 +159,75 @@ The following macros can be overridden on the command-line:
 - ``DEBUG``: if ``1``, enable driver debugging.
 - ``DPDK_6WIND``: if ``1``, enable 6WIND DPDK extensions.
 
-Quick testing
-=============
+Testing
+=======
 
 Provided all software components have been successfully installed and at least
 one ConnectX adapter is present in the host system, ``testpmd`` can be used to
 test it.
 
-Depending on how ``libpmd_rte_mlx4`` is compiled, the extra option ``-d
-librte_pmd_mlx4.so`` may have to be passed to the DPDK if it's a shared
-object.
+If ``libpmd_rte_mlx4`` is compiled externally as a shared object, the extra
+option ``-d librte_pmd_mlx4.so`` is necessary.
 
-These examples assume a dual port adapter with both ports linked to another
-similar host.
+The following examples assume a machine configured with two dual-port
+adapters (4 ports total), on which the second ports are connected to each
+other using a crossover cable (40Gbps speed).
 
 Run ``testpmd`` interactively from the DPDK build tree (for more information
 about its command-line options, please refer to its documentation)::
 
- # ~/DPDK/build/app/testpmd -c 0x6 -n 3 -- -i # internal
+ # ~/DPDK/build/app/testpmd -c 0x600 -n 4 -- -i # internal
  # # or:
- # ~/DPDK/build/app/testpmd -d ~/librte_pmd_mlx4-1.9/librte_pmd_mlx4.so -c 0x6 -n 3 -- -i # external
- EAL: coremask set to 6
- EAL: Error reading numa node link for lcore 1 - using physical package id instead
- EAL: Detected lcore 1 as core 1 on socket 0
- EAL: Error reading numa node link for lcore 2 - using physical package id instead
- EAL: Detected lcore 2 as core 2 on socket 0
+ # ~/DPDK/build/app/testpmd -d ~/librte_pmd_mlx4-1.10/librte_pmd_mlx4.so -c 0x600 -n 4 -- -i # external
+ EAL: coremask set to 600
+ EAL: Detected lcore 9 as core 1 on socket 1
+ EAL: Detected lcore 10 as core 2 on socket 1
  EAL: Setting up hugepage memory...
- EAL: Ask a virtual area of 0xc00000 bytes
- EAL: Virtual area found at 0x7fb438e00000 (size = 0xc00000)
+ EAL: Ask a virtual area of 0x76400000 bytes
+ EAL: Virtual area found at 0x2aaa34600000 (size = 0x76400000)
  [...]
+ EAL: Ask a virtual area of 0x200000 bytes
+ EAL: Virtual area found at 0x7f48d8400000 (size = 0x200000)
  EAL: Requesting 1024 pages of size 2MB from socket 0
+ EAL: Requesting 1024 pages of size 2MB from socket 1
  EAL: Increasing open file limit
- EAL: WARNING: Cannot mmap /dev/hpet! The TSC will be used instead.
- EAL: Master core 1 is ready (tid=f7d38800)
- EAL: Core 2 is ready (tid=745f2700)
+ EAL: Master core 9 is ready (tid=6519b840)
+ EAL: Core 10 is ready (tid=d73e6700)
+ EAL: probe driver: 15b3:1003 rte_mlx4_pmd
+ EAL: probe driver: 15b3:1003 rte_mlx4_pmd
+ EAL: probe driver: 15b3:1003 rte_mlx4_pmd
  EAL: probe driver: 15b3:1003 rte_mlx4_pmd
  EAL: probe driver: 15b3:1003 rte_mlx4_pmd
  EAL: probe driver: 15b3:1003 rte_mlx4_pmd
  Interactive-mode selected
  Configuring Port 0
  Configuring Port 1
+ Configuring Port 2
+ Configuring Port 3
  Checking link statuses...
- Port 0 Link Up - speed 40000 Mbps - full-duplex
+ Port 0 Link Up - speed 10000 Mbps - full-duplex
  Port 1 Link Up - speed 40000 Mbps - full-duplex
+ Port 2 Link Up - speed 10000 Mbps - full-duplex
+ Port 3 Link Up - speed 40000 Mbps - full-duplex
  Done
  testpmd>
 
+As previously described:
+
+- DPDK port 0 is adapter 1 port 1, connected to another host at 10Gbps.
+- DPDK port 1 is adapter 1 port 2, connected to DPDK port 3 at 40Gbps.
+- DPDK port 2 is adapter 2 port 1, connected to another host at 10Gbps.
+- DPDK port 3 is adapter 2 port 2, connected to DPDK port 1 at 40Gbps.
+
 The following commands are typed from the ``testpmd`` interactive prompt.
 
-- Check port status with both ports connected::
+- Check ports status::
 
    testpmd> show port info all
 
    ********************* Infos for port 0  *********************
-   MAC address: 00:02:C9:F6:7D:70
+   MAC address: 00:02:C9:F6:7D:30
    Link status: up
-   Link speed: 40000 Mbps
-   Link duplex: full-duplex
-   Promiscuous mode: enabled
-   Allmulticast mode: disabled
-   Maximum number of MAC addresses: 128
-   VLAN offload:
-     strip on
-     filter on
-     qinq(extend) off
-
-   ********************* Infos for port 1  *********************
-   MAC address: 00:02:C9:F6:7D:71
-   Link status: up
-   Link speed: 40000 Mbps
-   Link duplex: full-duplex
-   Promiscuous mode: enabled
-   Allmulticast mode: disabled
-   Maximum number of MAC addresses: 128
-   VLAN offload:
-     strip on
-     filter on
-     qinq(extend) off
-   testpmd>
-
-- Check port status after disconnecting one of them::
-
-   testpmd> show port info all
-
-   ********************* Infos for port 0  *********************
-   MAC address: 00:02:C9:F6:7D:70
-   Link status: down
    Link speed: 10000 Mbps
    Link duplex: full-duplex
    Promiscuous mode: enabled
@@ -257,6 +239,32 @@ The following commands are typed from the ``testpmd`` interactive prompt.
      qinq(extend) off
 
    ********************* Infos for port 1  *********************
+   MAC address: 00:02:C9:F6:7D:31
+   Link status: up
+   Link speed: 40000 Mbps
+   Link duplex: full-duplex
+   Promiscuous mode: enabled
+   Allmulticast mode: disabled
+   Maximum number of MAC addresses: 128
+   VLAN offload:
+     strip on
+     filter on
+     qinq(extend) off
+
+   ********************* Infos for port 2  *********************
+   MAC address: 00:02:C9:F6:7D:70
+   Link status: up
+   Link speed: 10000 Mbps
+   Link duplex: full-duplex
+   Promiscuous mode: enabled
+   Allmulticast mode: disabled
+   Maximum number of MAC addresses: 128
+   VLAN offload:
+     strip on
+     filter on
+     qinq(extend) off
+
+   ********************* Infos for port 3  *********************
    MAC address: 00:02:C9:F6:7D:71
    Link status: up
    Link speed: 40000 Mbps
@@ -270,10 +278,77 @@ The following commands are typed from the ``testpmd`` interactive prompt.
      qinq(extend) off
    testpmd>
 
-- Plug it back and start basic forwarding between the two ports::
+- Check ports status after disconnecting DPDK port 3 by manually removing
+  its QSFP adapter::
 
+   testpmd> show port info all
+
+   ********************* Infos for port 0  *********************
+   MAC address: 00:02:C9:F6:7D:30
+   Link status: up
+   Link speed: 10000 Mbps
+   Link duplex: full-duplex
+   Promiscuous mode: enabled
+   Allmulticast mode: disabled
+   Maximum number of MAC addresses: 128
+   VLAN offload:
+     strip on
+     filter on
+     qinq(extend) off
+
+   ********************* Infos for port 1  *********************
+   MAC address: 00:02:C9:F6:7D:31
+   Link status: down
+   Link speed: 40000 Mbps
+   Link duplex: full-duplex
+   Promiscuous mode: enabled
+   Allmulticast mode: disabled
+   Maximum number of MAC addresses: 128
+   VLAN offload:
+     strip on
+     filter on
+     qinq(extend) off
+
+   ********************* Infos for port 2  *********************
+   MAC address: 00:02:C9:F6:7D:70
+   Link status: up
+   Link speed: 10000 Mbps
+   Link duplex: full-duplex
+   Promiscuous mode: enabled
+   Allmulticast mode: disabled
+   Maximum number of MAC addresses: 128
+   VLAN offload:
+     strip on
+     filter on
+     qinq(extend) off
+
+   ********************* Infos for port 3  *********************
+   MAC address: 00:02:C9:F6:7D:71
+   Link status: down
+   Link speed: 10000 Mbps
+   Link duplex: full-duplex
+   Promiscuous mode: enabled
+   Allmulticast mode: disabled
+   Maximum number of MAC addresses: 128
+   VLAN offload:
+     strip on
+     filter on
+     qinq(extend) off
+   testpmd>
+
+  DPDK port 1 which still has its QSFP adapter shows a 40Gbps link speed
+  with status "down", while DPDK port 3 only shows a 10Gbps link speed due
+  to the missing QSFP adapter. DPDK ports 0 and 2 are obviously unaffected
+  by this.
+
+- Plug it back and start MAC forwarding between ports 1 and 3::
+
+   testpmd> set fwd mac
+   Set mac packet forwarding mode
+   testpmd> set portlist 1,3
+   previous number of forwarding ports 4 - changed to number of configured ports 2
    testpmd> start
-     io packet forwarding - CRC stripping disabled - packets/burst=16
+     mac packet forwarding - CRC stripping disabled - packets/burst=16
      nb forwarding cores=1 - nb forwarding ports=2
      RX queues=1 - RX desc=128 - RX free threshold=0
      RX threshold registers: pthresh=8 hthresh=8 wthresh=4
@@ -282,38 +357,120 @@ The following commands are typed from the ``testpmd`` interactive prompt.
      TX RS bit threshold=0 - TXQ flags=0x0
    testpmd>
 
-- On the other host (under Linux), enable both interfaces, run ``tcpdump`` on
-  one of them and send a ping through the other one::
+- In the following examples, ``eth18`` and ``eth19`` are equivalent to DPDK
+  ports 1 and 3, respectively. Commands are entered from another terminal
+  while ``testpmd`` is still running::
 
-   other# ifconfig eth4 up
-   other# ifconfig eth5 up
-   other# arp -s -i eth4 1.2.3.4 00:02:C9:F6:7D:71
-   other# tpcdump -nvei eth5 &
-   [1] 27404
-   tcpdump: WARNING: eth5: no IPv4 address assigned
-   tcpdump: listening on eth5, link-type EN10MB (Ethernet), capture size 65535 bytes
-   other# ping -c1 -I eth4 1.2.3.4
-   PING 1.2.3.4 (1.2.3.4) from 10.16.0.173 eth4: 56(84) bytes of data.
-   17:42:06.611598 00:02:c9:f6:7d:31 > 00:02:c9:f6:7d:71, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 64, id 0, offset 0, flags [DF], proto ICMP (1), length 84)
-       10.16.0.173 > 1.2.3.4: ICMP echo request, id 17003, seq 1, length 64
+   root# ifconfig eth18
+   eth18     Link encap:Ethernet  HWaddr 00:02:c9:f6:7d:31
+             inet6 addr: fe80::2:c900:1f6:7d31/64 Scope:Link
+             UP BROADCAST RUNNING MULTICAST  MTU:8000  Metric:1
+             RX packets:0 errors:0 dropped:0 overruns:0 frame:0
+             TX packets:19 errors:0 dropped:0 overruns:0 carrier:0
+             collisions:0 txqueuelen:1000
+             RX bytes:0 (0.0 B)  TX bytes:24195 (23.6 KiB)
 
+   root# ifconfig eth19
+   eth19     Link encap:Ethernet  HWaddr 00:02:c9:f6:7d:71
+             inet6 addr: fe80::2:c900:1f6:7d71/64 Scope:Link
+             UP BROADCAST RUNNING MULTICAST  MTU:8000  Metric:1
+             RX packets:0 errors:0 dropped:0 overruns:0 frame:0
+             TX packets:6 errors:0 dropped:0 overruns:0 carrier:0
+             collisions:0 txqueuelen:1000
+             RX bytes:0 (0.0 B)  TX bytes:468 (468.0 B)
+
+- Generate a single packet on ``eth18``::
+
+   root# arp -s -i eth18 1.2.3.4 00:02:c9:f6:7d:71 # eth19's MAC address
+   root# ping -I eth18 -c1 1.2.3.4
+   PING 1.2.3.4 (1.2.3.4) from 10.16.0.116 eth18: 56(84) bytes of data.
    ^C
    --- 1.2.3.4 ping statistics ---
-   1 packets transmitted, 0 received, 100% packet loss, time 2510ms
+   1 packets transmitted, 0 received, 100% packet loss, time 0ms
 
-  The packet goes through unchanged.
-
-- Display ports statistics::
+- Display ``testpmd`` ports statistics::
 
    testpmd> show port stats all
 
      ######################## NIC statistics for port 0  ########################
      RX-packets: 0          RX-errors: 0         RX-bytes: 0
-     TX-packets: 1          TX-errors: 0         TX-bytes: 98
+     TX-packets: 0          TX-errors: 0         TX-bytes: 0
      ############################################################################
 
      ######################## NIC statistics for port 1  ########################
-     RX-packets: 1          RX-errors: 0         RX-bytes: 98
+     RX-packets: 0          RX-errors: 0         RX-bytes: 0
+     TX-packets: 27202696   TX-errors: 0         TX-bytes: 2665864208
+     ############################################################################
+
+     ######################## NIC statistics for port 2  ########################
+     RX-packets: 0          RX-errors: 0         RX-bytes: 0
+     TX-packets: 0          TX-errors: 0         TX-bytes: 0
+     ############################################################################
+
+     ######################## NIC statistics for port 3  ########################
+     RX-packets: 27202759   RX-errors: 0         RX-bytes: 2665870382
+     TX-packets: 0          TX-errors: 0         TX-bytes: 0
+     ############################################################################
+   testpmd>
+
+  The ping packet is being forwarded by ``testpmd`` between both ports
+  through the crossover cable in a loop.
+
+- Use ``tcpdump`` to dump this packet on ``eth19``::
+
+   root# tcpdump -veni eth19 -c5
+   tcpdump: WARNING: eth19: no IPv4 address assigned
+   tcpdump: listening on eth19, link-type EN10MB (Ethernet), capture size 65535 bytes
+   17:10:10.767264 00:02:c9:f6:7d:31 > 02:00:00:00:00:00, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 64, id 0, offset 0, flags [DF], proto ICMP (1), length 84) 10.16.0.116 > 1.2.3.4: ICMP echo request, id 14217, seq 1, length 64
+   17:10:10.767266 00:02:c9:f6:7d:31 > 02:00:00:00:00:00, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 64, id 0, offset 0, flags [DF], proto ICMP (1), length 84) 10.16.0.116 > 1.2.3.4: ICMP echo request, id 14217, seq 1, length 64
+   17:10:10.767266 00:02:c9:f6:7d:31 > 02:00:00:00:00:00, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 64, id 0, offset 0, flags [DF], proto ICMP (1), length 84) 10.16.0.116 > 1.2.3.4: ICMP echo request, id 14217, seq 1, length 64
+   17:10:10.767267 00:02:c9:f6:7d:31 > 02:00:00:00:00:00, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 64, id 0, offset 0, flags [DF], proto ICMP (1), length 84) 10.16.0.116 > 1.2.3.4: ICMP echo request, id 14217, seq 1, length 64
+   17:10:10.767268 00:02:c9:f6:7d:31 > 02:00:00:00:00:00, ethertype IPv4 (0x0800), length 98: (tos 0x0, ttl 64, id 0, offset 0, flags [DF], proto ICMP (1), length 84) 10.16.0.116 > 1.2.3.4: ICMP echo request, id 14217, seq 1, length 64
+   5 packets captured
+   442 packets received by filter
+   406 packets dropped by kernel
+
+- Stop forwarding and display ports statistics::
+
+   testpmd> stop
+   Telling cores to stop...
+   Waiting for lcores to finish...
+
+     ---------------------- Forward statistics for port 1  ----------------------
+     RX-packets: 0              RX-dropped: 0             RX-total: 0
+     TX-packets: 33029196       TX-dropped: 0             TX-total: 33029196
+     ----------------------------------------------------------------------------
+
+     ---------------------- Forward statistics for port 3  ----------------------
+     RX-packets: 33029196       RX-dropped: 0             RX-total: 33029196
+     TX-packets: 0              TX-dropped: 0             TX-total: 0
+     ----------------------------------------------------------------------------
+
+     +++++++++++++++ Accumulated forward statistics for all ports+++++++++++++++
+     RX-packets: 33029196       RX-dropped: 0             RX-total: 33029196
+     TX-packets: 33029196       TX-dropped: 0             TX-total: 33029196
+     ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+   Done.
+   testpmd> show port stats all
+
+     ######################## NIC statistics for port 0  ########################
+     RX-packets: 0          RX-errors: 0         RX-bytes: 0
+     TX-packets: 0          TX-errors: 0         TX-bytes: 0
+     ############################################################################
+
+     ######################## NIC statistics for port 1  ########################
+     RX-packets: 0          RX-errors: 0         RX-bytes: 0
+     TX-packets: 33029196   TX-errors: 0         TX-bytes: 3236861208
+     ############################################################################
+
+     ######################## NIC statistics for port 2  ########################
+     RX-packets: 0          RX-errors: 0         RX-bytes: 0
+     TX-packets: 0          TX-errors: 0         TX-bytes: 0
+     ############################################################################
+
+     ######################## NIC statistics for port 3  ########################
+     RX-packets: 33029196   RX-errors: 0         RX-bytes: 3236861208
      TX-packets: 0          TX-errors: 0         TX-bytes: 0
      ############################################################################
    testpmd>
@@ -323,5 +480,7 @@ The following commands are typed from the ``testpmd`` interactive prompt.
    testpmd> quit
    Stopping port 0...done
    Stopping port 1...done
+   Stopping port 2...done
+   Stopping port 3...done
    bye...
-   #
+   root#
