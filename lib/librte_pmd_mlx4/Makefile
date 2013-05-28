@@ -17,6 +17,10 @@ else
 CFLAGS += -DNDEBUG -UPEDANTIC
 endif
 
+# DPDK specifies -march=native by default which implicitly uses -mtune=native.
+# Forcing -mtune=generic instead yields better performance.
+CFLAGS += -mtune=generic
+
 SRCS-$(CONFIG_RTE_LIBRTE_MLX4_PMD) += mlx4.c
 
 DEPDIRS-$(CONFIG_RTE_LIBRTE_MLX4_PMD) += lib/librte_eal
