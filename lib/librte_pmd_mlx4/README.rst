@@ -103,6 +103,8 @@ IGB and IXGBE drivers (``librte_pmd_igb`` and ``librte_pmd_ixgbe``).
  [...]
  # patch -p2 < ~/0003-pci-allow-drivers-to-be-bound-several-times-to-the-s.patch
  [...]
+ # patch -p2 < ~/0004-pci-fix-probing-blacklisted-device-with-RTE_PCI_DRV_.patch
+ [...]
  # cd lib
  # tar xzf ~/librte_pmd_mlx4-1.10.tar.gz
  # ln -s librte_pmd_mlx4-1.10 librte_pmd_mlx4
