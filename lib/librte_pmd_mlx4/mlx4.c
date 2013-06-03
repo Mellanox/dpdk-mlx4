@@ -2745,8 +2745,10 @@ mlx4_dev_control(struct rte_eth_dev *dev, uint32_t command, void *arg)
 			dev->rx_pkt_burst = mlx4_rx_burst_sp;
 		else
 			dev->rx_pkt_burst = mlx4_rx_burst;
-		if (!ok)
-			return -EINVAL;
+		if (!ok) {
+			ret = EINVAL;
+			break;
+		}
 		priv->mtu = data->u16;
 		ret = 0;
 		break;
