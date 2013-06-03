@@ -22,6 +22,14 @@
 #include <limits.h>
 #include <assert.h>
 #include <arpa/inet.h>
+#include <net/if.h>
+#include <dirent.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <linux/if.h>
+#include <linux/ethtool.h>
+#include <linux/sockios.h>
 
 /* DPDK headers don't like -pedantic. */
 #ifdef PEDANTIC
@@ -231,6 +239,94 @@ static void
 priv_unlock(struct priv *priv)
 {
 	rte_spinlock_unlock(&priv->lock);
+}
+
+/* Get interface name from priv. */
+static int
+priv_get_ifname(const struct priv *priv, char (*ifname)[IF_NAMESIZE])
+{
+	size_t len = 0;
+	int ret;
+	DIR *dir;
+	struct dirent *dent;
+
+	do {
+		char path[len + 1];
+
+		ret = snprintf(path, (len + 1), "%s/device/net",
+			       priv->ctx->device->ibdev_path);
+		if (ret <= 0)
+			return errno;
+		if (len == 0) {
+			len = ret;
+			continue;
+		}
+		dir = opendir(path);
+		if (dir == NULL)
+			return errno;
+		break;
+	}
+	while (1);
+	ret = -1;
+	while ((dent = readdir(dir)) != NULL) {
+		char *name = dent->d_name;
+		FILE *file;
+		unsigned int dev_id;
+
+		if ((name[0] == '.') &&
+		    ((name[1] == '\0') ||
+		     ((name[1] == '.') && (name[2] == '\0'))))
+			continue;
+		len = 0;
+		do {
+			char path[len + 1];
+
+			ret = snprintf(path, (len + 1),
+				       "%s/device/net/%s/dev_id",
+				       priv->ctx->device->ibdev_path,
+				       name);
+			if (ret <= 0)
+				break;
+			if (len == 0) {
+				len = ret;
+				continue;
+			}
+			file = fopen(path, "rb");
+			if (file == NULL)
+				break;
+			if ((fscanf(file, "%x", &dev_id) == 1) &&
+			    (dev_id == (priv->port - 1u)))
+				ret = 0;
+			fclose(file);
+			break;
+		}
+		while (1);
+		if (ret == 0) {
+			snprintf(*ifname, sizeof(*ifname), "%s", name);
+			break;
+		}
+	}
+	closedir(dir);
+	return ret;
+}
+
+/* Perform ifreq ioctl() on associated Ethernet device. */
+static int
+priv_ifreq(const struct priv *priv, int req, struct ifreq *ifr)
+{
+	int sock = socket(PF_INET, SOCK_DGRAM, IPPROTO_IP);
+	int ret = -1;
+
+	if (sock == -1)
+		return ret;
+	if (priv_get_ifname(priv, &ifr->ifr_name)) {
+		errno = ENODEV;
+		goto end;
+	}
+	ret = ioctl(sock, req, ifr);
+end:
+	close(sock);
+	return ret;
 }
 
 /* Device configuration. */
@@ -2674,10 +2770,15 @@ mlx4_dev_control(struct rte_eth_dev *dev, uint32_t command, void *arg)
 		uint16_t u16;
 		struct rte_dev_ethtool_drvinfo info;
 		struct rte_dev_ethtool_gsettings gset;
+		struct rte_dev_ethtool_pauseparam pause;
 	} *data = arg;
 	int ret;
 	unsigned int i;
 	int ok;
+	struct ifreq ifr;
+	union {
+		struct ethtool_pauseparam pause;
+	} ethtool;
 
 	priv_lock(priv);
 	switch (command) {
@@ -2779,11 +2880,43 @@ mlx4_dev_control(struct rte_eth_dev *dev, uint32_t command, void *arg)
 		data->gset.autoneg = RTE_AUTONEG_ENABLE;
 		ret = 0;
 		break;
+	case RTE_DEV_CMD_ETHTOOL_GET_PAUSEPARAM:
+		ifr.ifr_data = &ethtool.pause;
+		ethtool.pause.cmd = ETHTOOL_GPAUSEPARAM;
+		if (priv_ifreq(priv, SIOCETHTOOL, &ifr)) {
+			ret = errno;
+			DEBUG("ioctl(SIOCETHTOOL, ETHTOOL_GPAUSEPARAM)"
+			      " failed: %s",
+			      strerror(errno));
+			break;
+		}
+		data->pause = (struct rte_dev_ethtool_pauseparam){
+			.autoneg = ethtool.pause.autoneg,
+			.rx_pause = ethtool.pause.rx_pause,
+			.tx_pause = ethtool.pause.tx_pause
+		};
+		ret = 0;
+		break;
+	case RTE_DEV_CMD_ETHTOOL_SET_PAUSEPARAM:
+		ifr.ifr_data = &ethtool.pause;
+		ethtool.pause = (struct ethtool_pauseparam){
+			.cmd = ETHTOOL_SPAUSEPARAM,
+			.autoneg = data->pause.autoneg,
+			.rx_pause = data->pause.rx_pause,
+			.tx_pause = data->pause.tx_pause
+		};
+		if (priv_ifreq(priv, SIOCETHTOOL, &ifr)) {
+			ret = errno;
+			DEBUG("ioctl(SIOCETHTOOL, ETHTOOL_SPAUSEPARAM)"
+			      " failed: %s",
+			      strerror(errno));
+			break;
+		}
+		ret = 0;
+		break;
 	case RTE_DEV_CMD_ETHTOOL_GET_SSET_COUNT:
 	case RTE_DEV_CMD_ETHTOOL_GET_STRINGS:
 	case RTE_DEV_CMD_ETHTOOL_GET_STATS:
-	case RTE_DEV_CMD_ETHTOOL_GET_PAUSEPARAM:
-	case RTE_DEV_CMD_ETHTOOL_SET_PAUSEPARAM:
 	default:
 		ret = ENOTSUP;
 		break;
@@ -2956,8 +3089,8 @@ static struct eth_dev_ops mlx4_dev_ops = {
 
 /* Get PCI information from struct ibv_device, return nonzero on error. */
 static int
-ibv_device_to_pci_addr(const struct ibv_device *device,
-		       struct rte_pci_addr *pci_addr)
+mlx4_ibv_device_to_pci_addr(const struct ibv_device *device,
+			    struct rte_pci_addr *pci_addr)
 {
 	FILE *file = NULL;
 	size_t len = 0;
@@ -3104,7 +3237,7 @@ mlx4_generic_init(struct eth_driver *drv, struct rte_eth_dev *dev, int probe)
 
 		--i;
 		DEBUG("checking device \"%s\"", list[i]->name);
-		if (ibv_device_to_pci_addr(list[i], &pci_addr))
+		if (mlx4_ibv_device_to_pci_addr(list[i], &pci_addr))
 			continue;
 		if ((dev->pci_dev->addr.domain != pci_addr.domain) ||
 		    (dev->pci_dev->addr.bus != pci_addr.bus) ||
@@ -3193,6 +3326,16 @@ mlx4_generic_init(struct eth_driver *drv, struct rte_eth_dev *dev, int probe)
 				     { "\xff\xff\xff\xff\xff\xff" }));
 	dev->dev_ops = &mlx4_dev_ops;
 	dev->data->mac_addrs = priv->mac;
+#ifndef NDEBUG
+	{
+		char ifname[IF_NAMESIZE];
+
+		if (priv_get_ifname(priv, &ifname) == 0)
+			DEBUG("port %u ifname is \"%s\"", priv->port, ifname);
+		else
+			DEBUG("port %u ifname is unknown", priv->port);
+	}
+#endif
 	return 0;
 error:
 	err = errno;
