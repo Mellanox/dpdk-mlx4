@@ -2954,35 +2954,30 @@ static struct eth_dev_ops mlx4_dev_ops = {
 	.fdir_set_masks = NULL
 };
 
-/* Get PCI information from a device name, return nonzero on error. */
+/* Get PCI information from struct ibv_device, return nonzero on error. */
 static int
-mlx4_dev_name_to_pci_addr(const char *dev_name, struct rte_pci_addr *pci_addr)
+ibv_device_to_pci_addr(const struct ibv_device *device,
+		       struct rte_pci_addr *pci_addr)
 {
 	FILE *file = NULL;
 	size_t len = 0;
 	int ret;
-	const char *sys_root = getenv("SYSFS_PATH");
 	char line[32];
 
-	if (sys_root == NULL)
-		sys_root = "/sys";
 	do {
-		char path[(len + 1)];
+		char path[len + 1];
 
-		ret = snprintf(path,
-			       (len + 1),
-			       "%s/class/infiniband/%s/device/uevent",
-			       sys_root,
-			       dev_name);
+		ret = snprintf(path, (len + 1), "%s/device/uevent",
+			       device->ibdev_path);
 		if (ret <= 0)
-			return -errno;
+			return errno;
 		if (len == 0) {
 			len = ret;
 			continue;
 		}
 		file = fopen(path, "rb");
 		if (file == NULL)
-			return -errno;
+			return errno;
 		break;
 	}
 	while (1);
@@ -3109,7 +3104,7 @@ mlx4_generic_init(struct eth_driver *drv, struct rte_eth_dev *dev, int probe)
 
 		--i;
 		DEBUG("checking device \"%s\"", list[i]->name);
-		if (mlx4_dev_name_to_pci_addr(list[i]->name, &pci_addr))
+		if (ibv_device_to_pci_addr(list[i], &pci_addr))
 			continue;
 		if ((dev->pci_dev->addr.domain != pci_addr.domain) ||
 		    (dev->pci_dev->addr.bus != pci_addr.bus) ||
