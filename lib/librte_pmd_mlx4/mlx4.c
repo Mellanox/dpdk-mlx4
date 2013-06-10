@@ -733,6 +733,7 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	unsigned int elts_cur = txq->elts_cur;
 	unsigned int i;
 	unsigned int max;
+	unsigned int dropped;
 	int err;
 
 	txq_complete(txq);
@@ -749,6 +750,7 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	}
 	if (max > pkts_n)
 		max = pkts_n;
+	dropped = 0;
 	for (i = 0; (i != max); ++i) {
 		struct txq_elt *elt = &(*elts)[elts_cur];
 		struct ibv_send_wr *wr = &elt->wr;
@@ -801,8 +803,10 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			DEBUG("too many segments for packet (maximum is %zu)",
 			      elemof(elt->sges));
 			/* Ignore this packet. */
-			++txq->stats.odropped;
+			++dropped;
 			rte_pktmbuf_free(pkts[i]);
+			/* Use invalid value for safe rollback. */
+			wr->num_sge = 0;
 			goto next;
 		}
 		/* Update WR. */
@@ -817,6 +821,9 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 #endif
 		continue;
 	}
+	/* Take a shortcut if everything was dropped. */
+	if (unlikely(dropped == max))
+		return 0;
 	*wr_next = NULL;
 	/* The last WR is the only one asking for a completion event. */
 	containerof(wr_next, struct ibv_send_wr, next)->
@@ -829,15 +836,19 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		struct txq_elt *first = bad;
 
 		/* Number of packets that will be sent. */
-		for (i = 0; (first->comp != NULL); ++i)
+		dropped = 0;
+		for (i = 0; (first->comp != NULL); ++i) {
+			if (first->wr.num_sge == 0)
+				++dropped;
 			first = first->comp;
+		}
 		assert(i < max);
 		DEBUG("%p: ibv_post_send(): failed for WR %p"
-		      " (only %u out of %u WR(s) posted): %s",
-		      (void *)txq->priv, (void *)bad_wr, i, max,
+		      " (only %u (%u dropped) out of %u WR(s) posted): %s",
+		      (void *)txq->priv, (void *)bad_wr, i, dropped, max,
 		      ((err <= -1) ? "Internal error" : strerror(err)));
 		/* Rollback elts_cur. */
-		elts_cur -= (max - i);
+		elts_cur -= (max - i - dropped);
 		elts_cur %= txq->elts_n;
 		/* Completion event has been lost. Link these elements to the
 		 * list of those without a completion event. They will be
@@ -862,9 +873,10 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	}
 	else
 		++txq->elts_comp;
-	txq->elts_used += i;
-	txq->elts_free -= i;
+	txq->elts_used += (i - dropped);
+	txq->elts_free -= (i - dropped);
 	txq->elts_cur = elts_cur;
+	txq->stats.odropped += dropped;
 	/* Sanity checks. */
 	assert(txq->elts_comp <= txq->elts_used);
 	assert(txq->elts_used <= txq->elts_n);
