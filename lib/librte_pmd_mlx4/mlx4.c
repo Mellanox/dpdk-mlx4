@@ -1987,6 +1987,20 @@ rxq_setup(struct rte_eth_dev *dev, struct rxq *rxq, uint16_t desc,
 		tmpl.sp = 1;
 		desc /= MLX4_PMD_SGE_WR_N;
 	}
+	/* Try to increase MTU if lower than desired MRU. */
+	if (priv->mtu < dev->data->dev_conf.rxmode.max_rx_pkt_len) {
+		struct ifreq ifr;
+
+		ifr.ifr_mtu = dev->data->dev_conf.rxmode.max_rx_pkt_len;
+		if (priv_ifreq(priv, SIOCSIFMTU, &ifr) == 0) {
+			DEBUG("adapter port %u MTU increased to %u",
+			      priv->port, ifr.ifr_mtu);
+			priv->mtu = ifr.ifr_mtu;
+		}
+		else
+			DEBUG("unable to set port %u MTU to %u: %s",
+			      priv->port, ifr.ifr_mtu, strerror(errno));
+	}
 	DEBUG("%p: %s scattered packets support (%u WRs)",
 	      (void *)dev, (tmpl.sp ? "enabling" : "disabling"), desc);
 	/* Get mempool size. */
@@ -2800,10 +2814,22 @@ mlx4_dev_control(struct rte_eth_dev *dev, uint32_t command, void *arg)
 	priv_lock(priv);
 	switch (command) {
 	case RTE_DEV_CMD_GET_MTU:
+		if (priv_ifreq(priv, SIOCGIFMTU, &ifr)) {
+			ret = errno;
+			DEBUG("ioctl(SIOCGIFMTU) failed: %s", strerror(errno));
+			break;
+		}
+		priv->mtu = ifr.ifr_mtu;
 		data->u16 = priv->mtu;
 		ret = 0;
 		break;
 	case RTE_DEV_CMD_SET_MTU:
+		ifr.ifr_mtu = data->u16;
+		if (priv_ifreq(priv, SIOCSIFMTU, &ifr)) {
+			ret = errno;
+			DEBUG("ioctl(SIOCSIFMTU) failed: %s", strerror(errno));
+			break;
+		}
 		dev->rx_pkt_burst = removed_rx_burst;
 		dev->data->dev_conf.rxmode.jumbo_frame =
 			(data->u16 > ETHER_MAX_LEN);
@@ -3209,6 +3235,7 @@ mlx4_generic_init(struct eth_driver *drv, struct rte_eth_dev *dev, int probe)
 	struct ibv_pd *pd = NULL;
 	struct ibv_device_attr device_attr;
 	struct ibv_port_attr port_attr;
+	struct ifreq ifr;
 	int idx;
 	int i;
 
@@ -3355,6 +3382,10 @@ mlx4_generic_init(struct eth_driver *drv, struct rte_eth_dev *dev, int probe)
 			DEBUG("port %u ifname is unknown", priv->port);
 	}
 #endif
+	/* Get actual MTU if possible. */
+	if (priv_ifreq(priv, SIOCGIFMTU, &ifr) == 0)
+		priv->mtu = ifr.ifr_mtu;
+	DEBUG("port %u MTU is %u", priv->port, priv->mtu);
 	return 0;
 error:
 	err = errno;
