@@ -2339,7 +2339,8 @@ mlx4_dev_close(struct rte_eth_dev *dev)
 
 	priv_lock(priv);
 	DEBUG("%p: closing device \"%s\"",
-	      (void *)dev, priv->ctx->device->name);
+	      (void *)dev,
+	      ((priv->ctx != NULL) ? priv->ctx->device->name : ""));
 	/* Prevent crashes when queues are still in use. This is unfortunately
 	 * still required for DPDK 1.3 because some programs (such as testpmd)
 	 * never release them before closing the device. */
@@ -2395,9 +2396,13 @@ mlx4_dev_close(struct rte_eth_dev *dev)
 	}
 	if (priv->rss)
 		rxq_cleanup(&priv->rxq_parent);
-	assert(priv->pd != NULL);
-	claim_zero(ibv_dealloc_pd(priv->pd));
-	claim_zero(ibv_close_device(priv->ctx));
+	if (priv->pd != NULL) {
+		assert(priv->ctx != NULL);
+		claim_zero(ibv_dealloc_pd(priv->pd));
+		claim_zero(ibv_close_device(priv->ctx));
+	}
+	else
+		assert(priv->ctx == NULL);
 	priv_unlock(priv);
 	memset(priv, 0, sizeof(*priv));
 }
@@ -3288,8 +3293,10 @@ mlx4_generic_init(struct eth_driver *drv, struct rte_eth_dev *dev, int probe)
 		DEBUG("bad state for port %d: \"%s\" (%d)",
 		      port, ibv_port_state_str(port_attr.state),
 		      port_attr.state);
-	if (probe)
-		pd = NULL;
+	if (probe) {
+		ibv_close_device(ctx);
+		ctx = NULL;
+	}
 	else {
 		/* Allocate protection domain. */
 		pd = ibv_alloc_pd(ctx);
