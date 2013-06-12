@@ -2755,7 +2755,7 @@ end:
 }
 
 static int
-mlx4_link_update(struct rte_eth_dev *dev, int wait_to_complete)
+mlx4_link_update_unlocked(struct rte_eth_dev *dev, int wait_to_complete)
 {
 	struct priv *priv = dev->data->dev_private;
 	struct ibv_port_attr port_attr;
@@ -2765,11 +2765,9 @@ mlx4_link_update(struct rte_eth_dev *dev, int wait_to_complete)
 	};
 
 	(void)wait_to_complete;
-	priv_lock(priv);
 	DEBUG("%p", (void *)dev);
 	if ((errno = ibv_query_port(priv->ctx, priv->port, &port_attr))) {
 		DEBUG("port query failed: %s", strerror(errno));
-		priv_unlock(priv);
 		return -1;
 	}
 	dev->data->dev_link = (struct rte_eth_link){
@@ -2783,12 +2781,22 @@ mlx4_link_update(struct rte_eth_dev *dev, int wait_to_complete)
 	if (memcmp(&port_attr, &priv->port_attr, sizeof(port_attr))) {
 		/* Link status changed. */
 		priv->port_attr = port_attr;
-		priv_unlock(priv);
 		return 0;
 	}
 	/* Link status is still the same. */
-	priv_unlock(priv);
 	return -1;
+}
+
+static int
+mlx4_link_update(struct rte_eth_dev *dev, int wait_to_complete)
+{
+	struct priv *priv = dev->data->dev_private;
+	int ret;
+
+	priv_lock(priv);
+	ret = mlx4_link_update_unlocked(dev, wait_to_complete);
+	priv_unlock(priv);
+	return ret;
 }
 
 #ifdef DPDK_6WIND
@@ -2908,7 +2916,7 @@ mlx4_dev_control(struct rte_eth_dev *dev, uint32_t command, void *arg)
 		ret = 0;
 		break;
 	case RTE_DEV_CMD_ETHTOOL_GET_SETTINGS:
-		mlx4_link_update(dev, 0);
+		mlx4_link_update_unlocked(dev, 0);
 		/* phy_addr not available. */
 		data->gset.phy_addr = 0;
 		data->gset.phy_addr = ~data->gset.phy_addr;
