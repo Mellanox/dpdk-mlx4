@@ -2765,7 +2765,6 @@ mlx4_link_update_unlocked(struct rte_eth_dev *dev, int wait_to_complete)
 	};
 
 	(void)wait_to_complete;
-	DEBUG("%p", (void *)dev);
 	if ((errno = ibv_query_port(priv->ctx, priv->port, &port_attr))) {
 		DEBUG("port query failed: %s", strerror(errno));
 		return -1;
