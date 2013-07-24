@@ -1756,6 +1756,8 @@ mlx4_rx_burst_sp(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		assert(j != 0);
 		pkt_buf->pkt.nb_segs = j;
 		pkt_buf->pkt.pkt_len = wc->byte_len;
+		pkt_buf->ol_flags = 0;
+
 		/* Return packet. */
 		*(pkts++) = pkt_buf;
 		++ret;
@@ -1895,8 +1897,11 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		/* Update seg information. */
 		seg->pkt.nb_segs = 1;
 		seg->pkt.in_port = rxq->port_id;
+		seg->pkt.next = NULL;
 		seg->pkt.pkt_len = len;
 		seg->pkt.data_len = len;
+		seg->ol_flags = 0;
+
 		/* Return packet. */
 		*(pkts++) = seg;
 		++ret;
