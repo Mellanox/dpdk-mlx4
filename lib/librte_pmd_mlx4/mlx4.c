@@ -1828,10 +1828,6 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		struct ibv_recv_wr *wr = &elt->wr;
 		struct rte_mbuf *seg = elt->buf;
 		struct rte_mbuf *rep;
-		uint32_t seg_headroom;
-#ifndef NDEBUG
-		uint32_t seg_tailroom;
-#endif
 
 		/* Sanity checks. */
 		assert(wr_id < rxq->elts_n);
@@ -1872,29 +1868,14 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			++rxq->priv->dev->data->rx_mbuf_alloc_failed;
 			goto repost;
 		}
-#ifndef NDEBUG
-		else {
-			/* assert() checks below need this. */
-			rep->pkt.data_len = 0;
-		}
-#endif
-		seg_headroom = ((uintptr_t)seg->pkt.data -
-				(uintptr_t)seg->buf_addr);
-		/* We don't expect any scattered packets. */
-		assert(len <= (seg_tailroom = (seg->buf_len - seg_headroom)));
-		assert(seg_tailroom == rte_pktmbuf_tailroom(seg));
-		/* Only the first segment comes with headroom. */
-		assert(seg_headroom == RTE_PKTMBUF_HEADROOM);
-		rep->pkt.data = (void *)((uintptr_t)rep->buf_addr +
-					 seg_headroom);
-		assert(rte_pktmbuf_headroom(rep) == seg_headroom);
-		assert(rte_pktmbuf_tailroom(rep) == seg_tailroom);
+
 		/* Reconfigure sge to use rep instead of seg. */
-		elt->sge.addr = (uintptr_t)rep->pkt.data;
-		assert(elt->sge.length == seg_tailroom);
+		elt->sge.addr = (uintptr_t)rep->buf_addr + RTE_PKTMBUF_HEADROOM;
 		assert(elt->sge.lkey == rxq->mr->lkey);
 		elt->buf = rep;
+
 		/* Update seg information. */
+		seg->pkt.data = (char *)seg->buf_addr + RTE_PKTMBUF_HEADROOM;
 		seg->pkt.nb_segs = 1;
 		seg->pkt.in_port = rxq->port_id;
 		seg->pkt.next = NULL;
