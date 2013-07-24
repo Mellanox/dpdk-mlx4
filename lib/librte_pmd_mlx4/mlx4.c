@@ -1692,7 +1692,7 @@ mlx4_rx_burst_sp(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			 * Fetch initial bytes of packet descriptor into a
 			 * cacheline while allocating rep.
 			 */
-			rte_prefetch0(&seg->pkt);
+			rte_prefetch0(seg);
 			rep = __rte_mbuf_raw_alloc(rxq->mp);
 			if (unlikely(rep == NULL)) {
 				/*
@@ -1857,7 +1857,7 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		 * Fetch initial bytes of packet descriptor into a
 		 * cacheline while allocating rep.
 		 */
-		rte_prefetch0(&seg->pkt);
+		rte_prefetch0(seg);
 		rep = __rte_mbuf_raw_alloc(rxq->mp);
 		if (unlikely(rep == NULL)) {
 			/*
