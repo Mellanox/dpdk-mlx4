@@ -4,6 +4,8 @@
 prefix ?= /usr/local/dpdk-addons
 exec_prefix ?= $(prefix)
 libdir ?= $(exec_prefix)/lib
+datarootdir ?= $(prefix)/share
+docdir ?= $(datarootdir)/doc
 
 ifdef BUILDING_RTE_SDK
 # Compile within DPDK.
@@ -42,7 +44,9 @@ else # RTE_LIBRTE_MLX4_PMD
 # Only depends on DPDK headers in $RTE_SDK.
 
 OUT = librte_pmd_mlx4.so
-SOLIB = $(OUT)
+O ?= .
+SOLIB=$O/$(OUT)
+
 SRC = mlx4.c
 HDR = mlx4.h
 OBJ = $(SRC:.c=.o)
@@ -71,6 +75,14 @@ all: warn $(OUT)
 install:
 	install -D -m 664 $(SOLIB) $(DESTDIR)$(libdir)/$(notdir $(SOLIB))
 
+doc: doc-default
+doc-%: FORCE
+	@ $(MAKE) -rR --no-print-directory -C doc \
+		DOC_TOOLS=$(abspath $(DOC_TOOLS)) \
+		O=$(abspath $O)/doc \
+		DESTDIR=$(abspath $(DESTDIR))$(docdir) \
+		$*
+
 $(OBJ): $(SRC) $(HDR)
 
 $(OUT): $(OBJ)
@@ -97,3 +109,5 @@ endif # RTE_LIBRTE_MLX4_PMD
 ifeq ($(DPDK_6WIND),1)
 CFLAGS += -DDPDK_6WIND
 endif
+
+.PHONY: doc FORCE
