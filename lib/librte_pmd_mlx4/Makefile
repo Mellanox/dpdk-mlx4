@@ -1,6 +1,10 @@
 # Copyright 6WIND 2012-2013, All rights reserved.
 # Copyright Mellanox 2012, All rights reserved.
 
+prefix ?= /usr/local/dpdk-addons
+exec_prefix ?= $(prefix)
+libdir ?= $(exec_prefix)/lib
+
 ifdef BUILDING_RTE_SDK
 # Compile within DPDK.
 
@@ -38,6 +42,7 @@ else # RTE_LIBRTE_MLX4_PMD
 # Only depends on DPDK headers in $RTE_SDK.
 
 OUT = librte_pmd_mlx4.so
+SOLIB = $(OUT)
 SRC = mlx4.c
 HDR = mlx4.h
 OBJ = $(SRC:.c=.o)
@@ -62,6 +67,9 @@ LDFLAGS += -shared
 LDFLAGS += -libverbs
 
 all: warn $(OUT)
+
+install:
+	install -D -m 664 $(SOLIB) $(DESTDIR)$(libdir)/$(notdir $(SOLIB))
 
 $(OBJ): $(SRC) $(HDR)
 
