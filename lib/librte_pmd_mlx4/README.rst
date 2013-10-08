@@ -1,37 +1,33 @@
 .. Copyright (c) <2012-2013>, 6WIND
    All rights reserved.
 
-============================
-Mellanox ConnectX-3 DPDK PMD
-============================
-
-.. contents::
-.. sectnum::
+.. title:: Mellanox ConnectX-3 DPDK poll mode driver
 
 ``librte_pmd_mlx4``
 ===================
 
-DPDK Poll-Mode Driver (PMD) for Mellanox ConnectX-3 Ethernet adapters.
+DPDK poll mode driver (PMD) for Mellanox ConnectX-3 Ethernet adapters.
 
-This driver is based on ``libibverbs`` and currently supports:
+This driver is based on *libibverbs* and currently supports:
 
-- Scattering/gathering RX/TX packets.
-- Multiple RX (with RSS/RCA) and TX queues.
-- Multiple MAC addresses.
-- VLAN filtering.
-- Link state information.
-- Software counters/statistics.
-- Start/stop/close operations.
-- Multiple physical ports host adapter (requires a DPDK patch).
-- DPDK 1.2.2 (6WIND or Intel).
-- DPDK 1.3.0 (6WIND or Intel).
+- Scattering/gathering RX/TX packets
+- Multiple RX (with RSS/RCA) and TX queues
+- Multiple MAC addresses
+- VLAN filtering
+- Link state information
+- Software counters/statistics
+- Start/stop/close operations
+- Multiple physical ports host adapter (requires a DPDK patch)
+- DPDK 1.2.2 (6WIND or Intel)
+- DPDK 1.3.0 (6WIND or Intel)
 
-Known limitations:
+Known limitations
+-----------------
 
 - Multiple RX VLAN filters can be configured, but only the first one works
   properly.
 - RSS hash key and options cannot be modified.
-- Hardware counters aren't implemented.
+- Hardware counters are not implemented.
 
 Installation
 ============
@@ -39,12 +35,12 @@ Installation
 Requirements
 ------------
 
-A Linux host with either a full installation of Mellanox OFED 2.0 (updated
-kernel drivers and libraries), or only following components:
+Linux host with either a full installation of Mellanox OFED 2.0 (updated
+kernel drivers and libraries), or only the following components:
 
-- Mellanox OFA kernel drivers (``mlnx-ofa_kernel``).
-- Generic verbs library and headers (``libibverbs``).
-- Mellanox ConnectX InfiniBand library (``libmlx4``).
+- Mellanox OFA kernel drivers (``mlnx-ofa_kernel``)
+- Generic verbs library and headers (``libibverbs``)
+- Mellanox ConnectX InfiniBand library (``libmlx4``)
 
 Some of the above components in their current version must be patched for RSS
 support and compiled in the following order:
@@ -63,8 +59,8 @@ applies to its headers location (``-I``).
 
 Other requirements:
 
-- A supported Intel (or 6WIND-provided) DPDK version.
-- An up-to-date GCC-based toolchain.
+- A supported Intel (or 6WIND-provided) DPDK version
+- An up-to-date GCC-based toolchain
 
 Compilation (internal)
 ----------------------
@@ -72,14 +68,14 @@ Compilation (internal)
 In this mode, ``librte_pmd_mlx4`` is compiled at the same time as the DPDK
 and internally linked with it.
 
-A few Makefiles and source files in the DPDK must be patched first in order
+A few Makefiles and source files in the DPDK must be patched first
 to include the new driver. This patch is provided separately.
 
 Other patches (also provided separately for DPDK 1.2.2 and DPDK 1.3.0) may be
 necessary:
 
-- One that fixes compilation warnings/errors when debugging is enabled.
-- Another that enables the DPDK to manage more than a single physical port
+- a patch to fix compilation warnings/errors when debugging is enabled,
+- a patch to allow the DPDK to manage more than one single physical port
   per adapter (the DPDK normally expects one PCI bus address per port).
 
 The driver itself must be unpacked in the ``lib/`` subdirectory, alongside
@@ -114,8 +110,7 @@ IGB and IXGBE drivers (``librte_pmd_igb`` and ``librte_pmd_ixgbe``).
  lrwxrwxrwx 1 root root   20 May 27 13:49 librte_pmd_mlx4 -> librte_pmd_mlx4-1.10
  drwxrwxr-x 2 root root 4096 May 23 11:48 librte_pmd_mlx4-1.10
 
-After this, the DPDK is ready to be configured/compiled and installed. Please
-refer to its installation procedure. The configuration templates include
+The DPDK is now ready to be configured/compiled and installed. For more information, see the corresponding installation procedure. The configuration templates include
 ``librte_pmd_mlx4`` by default.
 
 Configuration/compilation example::
@@ -147,9 +142,11 @@ Compilation (external)
 In this mode, ``librte_pmd_mlx4`` is compiled independently as a shared
 object. The DPDK source tree is only required for its headers.
 
-**Note: this mode is only supported by 6WIND's DPDK.**
+.. note::
 
-Once the DPDK is compiled, ``librte_pmd_mlx4`` can be unpacked elsewhere and
+   This mode is only supported by 6WIND DPDK.
+
+Once DPDK is compiled, ``librte_pmd_mlx4`` can be unpacked elsewhere and
 compiled::
 
  # tar xzf librte_pmd_mlx4-1.10.tar.gz
@@ -189,7 +186,7 @@ adapters (4 ports total), on which the second ports are connected to each
 other using a crossover cable (40Gbps speed).
 
 Run ``testpmd`` interactively from the DPDK build tree (for more information
-about its command-line options, please refer to its documentation)::
+about command-line options, see the corresponding documentation)::
 
  # ~/DPDK/build/app/testpmd -c 0x600 -n 4 -- -i # internal
  # # or:
@@ -351,7 +348,7 @@ The following commands are typed from the ``testpmd`` interactive prompt.
      qinq(extend) off
    testpmd>
 
-  DPDK port 1 which still has its QSFP adapter shows a 40Gbps link speed
+  DPDK port 1, which still has its QSFP adapter, shows a 40Gbps link speed
   with status "down", while DPDK port 3 only shows a 10Gbps link speed due
   to the missing QSFP adapter. DPDK ports 0 and 2 are obviously unaffected
   by this.
