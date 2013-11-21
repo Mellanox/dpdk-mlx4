@@ -3412,6 +3412,18 @@ static struct rte_pci_id mlx4_pci_id_map[] = {
 		.subsystem_device_id = PCI_ANY_ID
 	},
 	{
+		.vendor_id = PCI_VENDOR_ID_MELLANOX,
+		.device_id = PCI_DEVICE_ID_MELLANOX_CONNECTX3PRO,
+		.subsystem_vendor_id = PCI_ANY_ID,
+		.subsystem_device_id = PCI_ANY_ID
+	},
+	{
+		.vendor_id = PCI_VENDOR_ID_MELLANOX,
+		.device_id = PCI_DEVICE_ID_MELLANOX_CONNECTX3VF,
+		.subsystem_vendor_id = PCI_ANY_ID,
+		.subsystem_device_id = PCI_ANY_ID
+	},
+	{
 		.vendor_id = 0
 	}
 };
