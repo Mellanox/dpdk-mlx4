@@ -3,8 +3,8 @@
 
 .. title:: Mellanox ConnectX-3 DPDK poll-mode driver
 
-*librte_pmd_mlx4*
-=================
+About the Mellanox ConnectX-3 DPDK poll-mode driver
+===================================================
 
 :abbr:`DPDK (Data Plane Development Kit)` :abbr:`PMD (Poll-Mode Driver)` for Mellanox ConnectX-3 Ethernet adapters.
 
@@ -29,8 +29,8 @@ Known limitations
 - RSS hash key and options cannot be modified.
 - Hardware counters are not implemented.
 
-Installation
-============
+Dependencies
+------------
 
 Requirements
 ------------
@@ -62,121 +62,8 @@ Other requirements:
 - A supported Intel (or 6WIND-provided) :abbr:`DPDK (Data Plane Development Kit)` version
 - An up-to-date GCC-based toolchain
 
-Compilation (internal)
-----------------------
-
-In this mode, *librte_pmd_mlx4* is compiled at the same time as the :abbr:`DPDK (Data Plane Development Kit)`
-and internally linked with it.
-
-A few Makefiles and source files in the :abbr:`DPDK (Data Plane Development Kit)` must be patched first
-to include the new driver. This patch is provided separately.
-
-Other patches (also provided separately for :abbr:`DPDK (Data Plane Development Kit)` 1.2.2 and :abbr:`DPDK (Data Plane Development Kit)` 1.3.0) may be
-necessary:
-
-- a patch to fix compilation warnings/errors when debugging is enabled,
-- a patch to allow the :abbr:`DPDK (Data Plane Development Kit)` to manage more than one single physical port
-  per adapter (the :abbr:`DPDK (Data Plane Development Kit)` normally expects one PCI bus address per port).
-
-The driver itself must be unpacked in the *lib/* subdirectory, alongside
-IGB and IXGBE drivers (*librte_pmd_igb* and *librte_pmd_ixgbe*).
-
-::
-
- # unzip 516836_DPDK.L.1.3.0_183.zip
- Archive:  516836_DPDK.L.1.3.0_183.zip
-    creating: DPDK/
-   inflating: DPDK/LICENSE.GPL
-   inflating: DPDK/LICENSE.LGPL
-   inflating: DPDK/Makefile
-    creating: DPDK/app/
-   inflating: DPDK/app/Makefile
- [...]
- # cd DPDK
- # patch -p2 < ~/0001-librte_pmd_mlx4-implement-driver-support.patch
- [...]
- # patch -p2 < ~/0002-lib-fix-non-C99-macros-definitions-in-exported-heade.patch
- [...]
- # patch -p2 < ~/0003-pci-allow-drivers-to-be-bound-several-times-to-the-s.patch
- [...]
- # patch -p2 < ~/0004-pci-fix-probing-blacklisted-device-with-RTE_PCI_DRV_.patch
- [...]
- # cd lib
- # tar -xzvf /path/to/librte_pmd_mlx4-1.10.tar.gz
- # ln -s librte_pmd_mlx4-1.10 librte_pmd_mlx4
- # ls -ld librte_pmd_*
- drwxr-xr-x 3 root root 4096 Dec 17 12:09 librte_pmd_e1000
- drwxr-xr-x 3 root root 4096 Dec 17 12:09 librte_pmd_ixgbe
- lrwxrwxrwx 1 root root   20 May 27 13:49 librte_pmd_mlx4 -> librte_pmd_mlx4-1.10
- drwxrwxr-x 2 root root 4096 May 23 11:48 librte_pmd_mlx4-1.10
-
-The :abbr:`DPDK (Data Plane Development Kit)` is now ready to be configured/compiled and installed. For more information, see the corresponding installation procedure. The configuration templates include
-*librte_pmd_mlx4* by default.
-
-Configuration/compilation example::
-
- # cd DPDK
- # make config T=x86_64-default-linuxapp-gcc
- Configuration done
- # make
- [...]
- == Build lib/librte_pmd_mlx4
-   CC mlx4.o
-   AR librte_pmd_mlx4.a
-   INSTALL-LIB librte_pmd_mlx4.a
- [...]
- Build complete
-
-The following macros can be overridden in the configuration file or on the
-command-line:
-
-- *CONFIG_RTE_LIBRTE_MLX4_DEBUG*: if *y*, enable driver debugging.
-- *CONFIG_RTE_LIBRTE_MLX4_SGE_WR_N* (default: *4*): change the maximum
-  number of scatter/gather elements per work request. The minimum value is
-  1, which disables support for segmented packets and jumbo frames with a
-  size greater than a single segment for both TX and RX.
-
-Compilation (external)
-----------------------
-
-In this mode, *librte_pmd_mlx4* is compiled independently as a shared
-object. The :abbr:`DPDK (Data Plane Development Kit)` source tree is only required for its headers.
-
-.. note::
-
-   This mode is only supported by 6WIND :abbr:`DPDK (Data Plane Development Kit)`.
-
-Once :abbr:`DPDK (Data Plane Development Kit)` is compiled, *librte_pmd_mlx4* can be unpacked elsewhere and
-compiled::
-
- # tar -xzvf /path/to/librte_pmd_mlx4-1.10.tar.gz
- # cd librte_pmd_mlx4-1.10
- # make clean
- rm -f librte_pmd_mlx4.so mlx4.o
- # make RTE_SDK=~/DPDK DPDK_6WIND=1
- warning: RTE_TARGET is not set.
- gcc -I/root/DPDK/build/include -O3 -std=gnu99 -Wall -Wextra -fPIC -D_XOPEN_SOURCE=600 -DNDEBUG -UPEDANTIC   -c -o mlx4.o mlx4.c
- gcc -shared -libverbs -o librte_pmd_mlx4.so mlx4.o
- #
-
-The following macros can be overridden on the command-line:
-
-   RTE_SDK
-      :abbr:`DPDK (Data Plane Development Kit)` source tree location (mandatory).
-   RTE_TARGET
-      :abbr:`DPDK (Data Plane Development Kit)` output directory for generated files (default: *build*).
-   DEBUG
-      If *1*, enable driver debugging.
-   DPDK_6WIND
-      If *1*, enable 6WIND :abbr:`DPDK (Data Plane Development Kit)` extensions.
-   MLX4_PMD_SGE_WR_N
-      Change the maximum number of
-      scatter/gather elements per work request. The minimum value is 1, which
-      disables support for segmented packets and jumbo frames with a size
-      greater than a single segment for both TX and RX. Default: *4*).
-
-Testing
-=======
+Usage
+=====
 
 Provided all software components have been successfully installed and at least
 one ConnectX adapter is present in the host system, *testpmd* can be used to
@@ -500,3 +387,119 @@ The following commands are typed from the *testpmd* interactive prompt.
    Stopping port 3...done
    bye...
    root#
+
+Compilation
+===========
+
+Internal
+--------
+
+In this mode, *librte_pmd_mlx4* is compiled at the same time as the :abbr:`DPDK (Data Plane Development Kit)`
+and internally linked with it.
+
+A few Makefiles and source files in the :abbr:`DPDK (Data Plane Development Kit)` must be patched first
+to include the new driver. This patch is provided separately.
+
+Other patches (also provided separately for :abbr:`DPDK (Data Plane Development Kit)` 1.2.2 and :abbr:`DPDK (Data Plane Development Kit)` 1.3.0) may be
+necessary:
+
+- a patch to fix compilation warnings/errors when debugging is enabled,
+- a patch to allow the :abbr:`DPDK (Data Plane Development Kit)` to manage more than one single physical port
+  per adapter (the :abbr:`DPDK (Data Plane Development Kit)` normally expects one PCI bus address per port).
+
+The driver itself must be unpacked in the *lib/* subdirectory, alongside
+IGB and IXGBE drivers (*librte_pmd_igb* and *librte_pmd_ixgbe*).
+
+::
+
+ # unzip 516836_DPDK.L.1.3.0_183.zip
+ Archive:  516836_DPDK.L.1.3.0_183.zip
+    creating: DPDK/
+   inflating: DPDK/LICENSE.GPL
+   inflating: DPDK/LICENSE.LGPL
+   inflating: DPDK/Makefile
+    creating: DPDK/app/
+   inflating: DPDK/app/Makefile
+ [...]
+ # cd DPDK
+ # patch -p2 < ~/0001-librte_pmd_mlx4-implement-driver-support.patch
+ [...]
+ # patch -p2 < ~/0002-lib-fix-non-C99-macros-definitions-in-exported-heade.patch
+ [...]
+ # patch -p2 < ~/0003-pci-allow-drivers-to-be-bound-several-times-to-the-s.patch
+ [...]
+ # patch -p2 < ~/0004-pci-fix-probing-blacklisted-device-with-RTE_PCI_DRV_.patch
+ [...]
+ # cd lib
+ # tar -xzvf /path/to/librte_pmd_mlx4-1.10.tar.gz
+ # ln -s librte_pmd_mlx4-1.10 librte_pmd_mlx4
+ # ls -ld librte_pmd_*
+ drwxr-xr-x 3 root root 4096 Dec 17 12:09 librte_pmd_e1000
+ drwxr-xr-x 3 root root 4096 Dec 17 12:09 librte_pmd_ixgbe
+ lrwxrwxrwx 1 root root   20 May 27 13:49 librte_pmd_mlx4 -> librte_pmd_mlx4-1.10
+ drwxrwxr-x 2 root root 4096 May 23 11:48 librte_pmd_mlx4-1.10
+
+The :abbr:`DPDK (Data Plane Development Kit)` is now ready to be configured/compiled and installed. For more information, see the corresponding installation procedure. The configuration templates include
+*librte_pmd_mlx4* by default.
+
+Configuration/compilation example::
+
+ # cd DPDK
+ # make config T=x86_64-default-linuxapp-gcc
+ Configuration done
+ # make
+ [...]
+ == Build lib/librte_pmd_mlx4
+   CC mlx4.o
+   AR librte_pmd_mlx4.a
+   INSTALL-LIB librte_pmd_mlx4.a
+ [...]
+ Build complete
+
+The following macros can be overridden in the configuration file or on the
+command-line:
+
+- *CONFIG_RTE_LIBRTE_MLX4_DEBUG*: if *y*, enable driver debugging.
+- *CONFIG_RTE_LIBRTE_MLX4_SGE_WR_N* (default: *4*): change the maximum
+  number of scatter/gather elements per work request. The minimum value is
+  1, which disables support for segmented packets and jumbo frames with a
+  size greater than a single segment for both TX and RX.
+
+Compilation
+-----------
+
+In this mode, *librte_pmd_mlx4* is compiled independently as a shared
+object. The :abbr:`DPDK (Data Plane Development Kit)` source tree is only required for its headers.
+
+.. note::
+
+   This mode is only supported by 6WIND :abbr:`DPDK (Data Plane Development Kit)`.
+
+Once :abbr:`DPDK (Data Plane Development Kit)` is compiled, *librte_pmd_mlx4* can be unpacked elsewhere and
+compiled::
+
+ # tar -xzvf /path/to/librte_pmd_mlx4-1.10.tar.gz
+ # cd librte_pmd_mlx4-1.10
+ # make clean
+ rm -f librte_pmd_mlx4.so mlx4.o
+ # make RTE_SDK=~/DPDK DPDK_6WIND=1
+ warning: RTE_TARGET is not set.
+ gcc -I/root/DPDK/build/include -O3 -std=gnu99 -Wall -Wextra -fPIC -D_XOPEN_SOURCE=600 -DNDEBUG -UPEDANTIC   -c -o mlx4.o mlx4.c
+ gcc -shared -libverbs -o librte_pmd_mlx4.so mlx4.o
+ #
+
+The following macros can be overridden on the command-line:
+
+   RTE_SDK
+      :abbr:`DPDK (Data Plane Development Kit)` source tree location (mandatory).
+   RTE_TARGET
+      :abbr:`DPDK (Data Plane Development Kit)` output directory for generated files (default: *build*).
+   DEBUG
+      If *1*, enable driver debugging.
+   DPDK_6WIND
+      If *1*, enable 6WIND :abbr:`DPDK (Data Plane Development Kit)` extensions.
+   MLX4_PMD_SGE_WR_N
+      Change the maximum number of
+      scatter/gather elements per work request. The minimum value is 1, which
+      disables support for segmented packets and jumbo frames with a size
+      greater than a single segment for both TX and RX. Default: *4*).
