@@ -3218,15 +3218,13 @@ mlx4_ibv_device_to_pci_addr(const struct ibv_device *device,
 	return -ret;
 }
 
-/* Convert a 64 bit GUID to a MAC address. */
+/* Derive MAC address from port GID. */
 static void
-guid_to_mac(uint8_t (*mac)[ETHER_ADDR_LEN], uint64_t guid)
+mac_from_gid(uint8_t (*mac)[ETHER_ADDR_LEN], uint8_t *gid)
 {
-	uint8_t tmp[sizeof(guid)];
-
-	memcpy(tmp, &guid, sizeof(guid));
-	memcpy(&(*mac)[0], &tmp[0], 3);
-	memcpy(&(*mac)[3], &tmp[5], 3);
+	memcpy(&(*mac)[0], gid + 8, 3);
+	memcpy(&(*mac)[3], gid + 13, 3);
+	(*mac)[0] ^= 2;
 }
 
 /* Support up to 32 adapters. */
@@ -3276,6 +3274,7 @@ mlx4_generic_init(struct eth_driver *drv, struct rte_eth_dev *dev, int probe)
 			      IBV_EXP_DEVICE_ATTR_RSS_TBL_SZ)
 	};
 #endif /* RSS_SUPPORT */
+	union ibv_gid temp_gid;
 	int idx;
 	int i;
 
@@ -3410,10 +3409,13 @@ mlx4_generic_init(struct eth_driver *drv, struct rte_eth_dev *dev, int probe)
 		DEBUG("maximum RSS indirection table size: %u",
 		      exp_device_attr.max_rss_tbl_sz);
 #endif /* RSS_SUPPORT */
-	guid_to_mac(&priv->mac[0].addr_bytes, priv->device_attr.node_guid);
+	if (ibv_query_gid(ctx, port, 0, &temp_gid)) {
+		DEBUG("ibv_query_gid() failure");
+		goto error;
+	}
+	/* Configure the first MAC address by default. */
+	mac_from_gid(&priv->mac[0].addr_bytes, temp_gid.raw);
 	BITFIELD_SET(priv->mac_configured, 0);
-	/* Update MAC address according to port number. */
-	priv->mac[0].addr_bytes[5] += (priv->port - 1);
 	DEBUG("port %u MAC address is %02x:%02x:%02x:%02x:%02x:%02x",
 	      priv->port,
 	      priv->mac[0].addr_bytes[0], priv->mac[0].addr_bytes[1],
