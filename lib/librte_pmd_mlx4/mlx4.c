@@ -797,6 +797,7 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			/* Update SGE. */
 			elt->bufs[seg_n] = buf;
 			sge->addr = (uintptr_t)buf->pkt.data;
+			rte_prefetch0((volatile void *)sge->addr);
 			sge->length = buf->pkt.data_len;
 			sge->lkey = lkey;
 			/* Increase number of segments (SGEs). */
