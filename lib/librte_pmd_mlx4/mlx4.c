@@ -220,6 +220,7 @@ struct priv {
 	unsigned int hw_tss:1; /* TSS is supported. */
 	unsigned int hw_rss:1; /* RSS is supported. */
 	unsigned int rss:1; /* RSS is enabled. */
+	unsigned int max_rss_tbl_sz; /* Maximum number of RSS queues. */
 	/* RX/TX queues. */
 	struct rxq rxq_parent; /* Parent queue when RSS is enabled. */
 	unsigned int rxqs_n; /* RX queues array size. */
@@ -381,6 +382,12 @@ dev_configure(struct rte_eth_dev *dev)
 		DEBUG("%p: only a single RX queue can be configured when"
 		      " hardware doesn't support RSS",
 		      (void *)dev);
+		return -EINVAL;
+	}
+	/* Fail if hardware doesn't support that many RSS queues. */
+	if (rxqs_n >= priv->max_rss_tbl_sz) {
+		DEBUG("%p: only %u RX queues can be configured for RSS",
+		      (void *)dev, priv->max_rss_tbl_sz);
 		return -EINVAL;
 	}
 	priv->rss = 1;
@@ -1915,6 +1922,77 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	return ret;
 }
 
+static struct ibv_qp *
+rxq_setup_qp(struct priv *priv, struct ibv_cq *cq, uint16_t desc)
+{
+	struct ibv_qp_init_attr attr = {
+		/* CQ to be associated with the send queue. */
+		.send_cq = cq,
+		/* CQ to be associated with the receive queue. */
+		.recv_cq = cq,
+		.cap = {
+			/* Max number of outstanding WRs. */
+			.max_recv_wr = ((priv->device_attr.max_qp_wr < desc) ?
+					priv->device_attr.max_qp_wr :
+					desc),
+			/* Max number of scatter/gather elements in a WR. */
+			.max_recv_sge = ((priv->device_attr.max_sge <
+					  MLX4_PMD_SGE_WR_N) ?
+					 priv->device_attr.max_sge :
+					 MLX4_PMD_SGE_WR_N),
+		},
+		.qp_type = IBV_QPT_RAW_PACKET
+	};
+
+	return ibv_create_qp(priv->pd, &attr);
+}
+
+#if RSS_SUPPORT
+
+static struct ibv_qp *
+rxq_setup_qp_rss(struct priv *priv, struct ibv_cq *cq, uint16_t desc,
+		 int parent)
+{
+	struct ibv_exp_qp_init_attr attr = {
+		/* CQ to be associated with the send queue. */
+		.send_cq = cq,
+		/* CQ to be associated with the receive queue. */
+		.recv_cq = cq,
+		.cap = {
+			/* Max number of outstanding WRs. */
+			.max_recv_wr = ((priv->device_attr.max_qp_wr < desc) ?
+					priv->device_attr.max_qp_wr :
+					desc),
+			/* Max number of scatter/gather elements in a WR. */
+			.max_recv_sge = ((priv->device_attr.max_sge <
+					  MLX4_PMD_SGE_WR_N) ?
+					 priv->device_attr.max_sge :
+					 MLX4_PMD_SGE_WR_N),
+		},
+		.qp_type = IBV_QPT_RAW_PACKET,
+		.comp_mask = (IBV_EXP_QP_INIT_ATTR_PD |
+			      IBV_EXP_QP_INIT_ATTR_QPG),
+		.pd = priv->pd
+	};
+
+	if (parent) {
+		attr.qpg.qpg_type = IBV_QPG_PARENT;
+		/* TSS isn't necessary. */
+		attr.qpg.parent_attrib.tss_child_count = 0;
+		attr.qpg.parent_attrib.rss_child_count = priv->rxqs_n;
+		attr.qpg.qpg_parent = NULL;
+		DEBUG("initializing parent RSS queue");
+	}
+	else {
+		attr.qpg.qpg_type = IBV_QPG_CHILD_RX;
+		attr.qpg.qpg_parent = priv->rxq_parent.qp;
+		DEBUG("initializing child RSS queue");
+	}
+	return ibv_exp_create_qp(priv->ctx, &attr);
+}
+
+#endif /* RSS_SUPPORT */
+
 static int
 rxq_setup(struct rte_eth_dev *dev, struct rxq *rxq, uint16_t desc,
 	  unsigned int socket, const struct rte_eth_rxconf *conf,
@@ -1926,10 +2004,7 @@ rxq_setup(struct rte_eth_dev *dev, struct rxq *rxq, uint16_t desc,
 		.mp = mp,
 		.socket = socket
 	};
-	union {
-		struct ibv_qp_init_attr init;
-		struct ibv_qp_attr mod;
-	} attr;
+	struct ibv_qp_attr mod;
 	struct ibv_recv_wr *bad_wr;
 	struct rte_mbuf *buf;
 	int ret = 0;
@@ -2013,59 +2088,25 @@ skip_mr:
 	      priv->device_attr.max_qp_wr);
 	DEBUG("priv->device_attr.max_sge is %d",
 	      priv->device_attr.max_sge);
-	attr.init = (struct ibv_qp_init_attr){
-		/* CQ to be associated with the send queue. */
-		.send_cq = tmpl.cq,
-		/* CQ to be associated with the receive queue. */
-		.recv_cq = tmpl.cq,
-		.cap = {
-			/* Max number of outstanding WRs. */
-			.max_recv_wr = ((priv->device_attr.max_qp_wr < desc) ?
-					priv->device_attr.max_qp_wr :
-					desc),
-			/* Max number of scatter/gather elements in a WR. */
-			.max_recv_sge = ((priv->device_attr.max_sge <
-					  MLX4_PMD_SGE_WR_N) ?
-					 priv->device_attr.max_sge :
-					 MLX4_PMD_SGE_WR_N)
-		},
-		.qp_type = IBV_QPT_RAW_PACKET
-	};
 #if RSS_SUPPORT
-	if (parent) {
-		attr.init.qpg_type = IBV_QPG_PARENT;
-		/* TSS isn't necessary. */
-		attr.init.parent_attrib.tss_child_count = 0;
-		attr.init.parent_attrib.rss_child_count = priv->rxqs_n;
-		DEBUG("initializing parent RSS queue");
-	}
-	else if (priv->rss) {
-		/* Make it a RSS queue. */
-		attr.init.qpg_type = IBV_QPG_CHILD_RX;
-		assert(priv->rxq_parent.qp != NULL);
-		attr.init.qpg_parent = priv->rxq_parent.qp;
-		DEBUG("initializing child RSS queue");
-	}
-	else {
-		attr.init.qpg_type = IBV_QPG_NONE;
-		attr.init.qpg_parent = NULL;
-		DEBUG("initializing queue without RSS");
-	}
+	if (priv->rss)
+		tmpl.qp = rxq_setup_qp_rss(priv, tmpl.cq, desc, parent);
+	else
 #endif /* RSS_SUPPORT */
-	tmpl.qp = ibv_create_qp(priv->pd, &attr.init);
+		tmpl.qp = rxq_setup_qp(priv, tmpl.cq, desc);
 	if (tmpl.qp == NULL) {
 		ret = errno;
 		DEBUG("%p: QP creation failure: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
 	}
-	attr.mod = (struct ibv_qp_attr){
+	mod = (struct ibv_qp_attr){
 		/* Move the QP to this state. */
 		.qp_state = IBV_QPS_INIT,
 		/* Primary port number. */
 		.port_num = priv->port
 	};
-	if ((ret = ibv_modify_qp(tmpl.qp, &attr.mod,
+	if ((ret = ibv_modify_qp(tmpl.qp, &mod,
 				 (IBV_QP_STATE |
 #if RSS_SUPPORT
 				  (parent ? IBV_QP_GROUP_RSS : 0) |
@@ -2107,10 +2148,10 @@ skip_mr:
 		goto error;
 	}
 skip_alloc:
-	attr.mod = (struct ibv_qp_attr){
+	mod = (struct ibv_qp_attr){
 		.qp_state = IBV_QPS_RTR
 	};
-	if ((ret = ibv_modify_qp(tmpl.qp, &attr.mod, IBV_QP_STATE))) {
+	if ((ret = ibv_modify_qp(tmpl.qp, &mod, IBV_QP_STATE))) {
 		DEBUG("%p: QP state to IBV_QPS_RTR failed: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
@@ -3229,6 +3270,12 @@ mlx4_generic_init(struct eth_driver *drv, struct rte_eth_dev *dev, int probe)
 	struct ibv_device_attr device_attr;
 	struct ibv_port_attr port_attr;
 	struct ifreq ifr;
+#if RSS_SUPPORT
+	struct ibv_exp_device_attr exp_device_attr = {
+		.comp_mask = (IBV_EXP_DEVICE_ATTR_FLAGS2 |
+			      IBV_EXP_DEVICE_ATTR_RSS_TBL_SZ)
+	};
+#endif /* RSS_SUPPORT */
 	int idx;
 	int i;
 
@@ -3336,16 +3383,32 @@ mlx4_generic_init(struct eth_driver *drv, struct rte_eth_dev *dev, int probe)
 	priv->pd = pd;
 	priv->mtu = ETHER_MTU;
 #if RSS_SUPPORT
-	priv->hw_qpg = !!(device_attr.device_cap_flags & IBV_DEVICE_QPG);
-	priv->hw_tss = !!(device_attr.device_cap_flags & IBV_DEVICE_UD_TSS);
-	priv->hw_rss = !!(device_attr.device_cap_flags & IBV_DEVICE_UD_RSS);
+	if (ibv_exp_query_device(ctx, &exp_device_attr)) {
+		DEBUG("experimental ibv_exp_query_device");
+		goto error;
+	}
+	if ((exp_device_attr.device_cap_flags2 & IBV_EXP_DEVICE_QPG) &&
+	    (exp_device_attr.device_cap_flags2 & IBV_EXP_DEVICE_UD_RSS) &&
+	    (exp_device_attr.comp_mask & IBV_EXP_DEVICE_ATTR_RSS_TBL_SZ) &&
+	    (exp_device_attr.max_rss_tbl_sz > 0)) {
+		priv->hw_qpg = 1;
+		priv->hw_rss = 1;
+		priv->max_rss_tbl_sz = exp_device_attr.max_rss_tbl_sz;
+	}
+	else {
+		priv->hw_qpg = 0;
+		priv->hw_rss = 0;
+		priv->max_rss_tbl_sz = 0;
+	}
+	priv->hw_tss = !!(exp_device_attr.device_cap_flags2 &
+			  IBV_EXP_DEVICE_UD_TSS);
 	DEBUG("device flags: %s%s%s",
 	      (priv->hw_qpg ? "IBV_DEVICE_QPG " : ""),
 	      (priv->hw_tss ? "IBV_DEVICE_TSS " : ""),
 	      (priv->hw_rss ? "IBV_DEVICE_RSS " : ""));
 	if (priv->hw_rss)
 		DEBUG("maximum RSS indirection table size: %u",
-		      device_attr.max_rss_tbl_sz);
+		      exp_device_attr.max_rss_tbl_sz);
 #endif /* RSS_SUPPORT */
 	guid_to_mac(&priv->mac[0].addr_bytes, priv->device_attr.node_guid);
 	BITFIELD_SET(priv->mac_configured, 0);
