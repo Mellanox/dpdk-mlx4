@@ -3220,11 +3220,12 @@ mlx4_ibv_device_to_pci_addr(const struct ibv_device *device,
 
 /* Derive MAC address from port GID. */
 static void
-mac_from_gid(uint8_t (*mac)[ETHER_ADDR_LEN], uint8_t *gid)
+mac_from_gid(uint8_t (*mac)[ETHER_ADDR_LEN], uint32_t port, uint8_t *gid)
 {
 	memcpy(&(*mac)[0], gid + 8, 3);
 	memcpy(&(*mac)[3], gid + 13, 3);
-	(*mac)[0] ^= 2;
+	if (port == 1)
+		(*mac)[0] ^= 2;
 }
 
 /* Support up to 32 adapters. */
@@ -3414,7 +3415,7 @@ mlx4_generic_init(struct eth_driver *drv, struct rte_eth_dev *dev, int probe)
 		goto error;
 	}
 	/* Configure the first MAC address by default. */
-	mac_from_gid(&priv->mac[0].addr_bytes, temp_gid.raw);
+	mac_from_gid(&priv->mac[0].addr_bytes, port, temp_gid.raw);
 	BITFIELD_SET(priv->mac_configured, 0);
 	DEBUG("port %u MAC address is %02x:%02x:%02x:%02x:%02x:%02x",
 	      priv->port,
