@@ -162,12 +162,16 @@ struct rxq {
 	unsigned int socket; /* CPU socket ID for allocations. */
 };
 
-/* TX element. */
-struct txq_elt {
+/* TX Work Request element. */
+struct txq_wr {
 	struct ibv_send_wr wr; /* Work Request. */
 	struct ibv_sge sges[MLX4_PMD_SGE_WR_N]; /* Scatter/Gather Elements. */
+};
+
+/* TX buffers for a Work Request element. */
+struct txq_buf {
 	struct rte_mbuf *bufs[MLX4_PMD_SGE_WR_N]; /* SGEs buffers. */
-	struct txq_elt *comp; /* Elements with the same completion event. */
+	struct txq_buf *comp; /* Elements with the same completion event. */
 };
 
 /* TX queue descriptor. */
@@ -184,13 +188,14 @@ struct txq {
 #if MLX4_PMD_MAX_INLINE > 0
 	uint32_t max_inline; /* Max inline send size <= MLX4_PMD_MAX_INLINE. */
 #endif
-	unsigned int elts_n; /* (*elts)[] length. */
-	struct txq_elt (*elts)[]; /* TX elements. */
+	unsigned int elts_n; /* (*elts_*)[] length. */
+	struct txq_wr (*elts_wr)[]; /* Work Requests elements. */
+	struct txq_buf (*elts_buf)[]; /* WRs buffers. */
 	unsigned int elts_cur; /* Current index in (*elts)[]. */
 	unsigned int elts_comp; /* Number of WRs waiting for completion. */
 	unsigned int elts_used; /* Number of used WRs (including elts_comp). */
 	unsigned int elts_free; /* Number of free WRs. */
-	struct txq_elt *lost_comp; /* Elements without a completion event. */
+	struct txq_buf *lost_comp; /* Elements without a completion event. */
 	struct rte_txq_stats stats; /* TX queue counters. */
 	unsigned int socket; /* CPU socket ID for allocations. */
 };
@@ -472,23 +477,27 @@ static int
 txq_alloc_elts(struct txq *txq, unsigned int elts_n)
 {
 	unsigned int i;
-	struct txq_elt (*elts)[elts_n] =
-		rte_calloc_socket("TXQ elements", 1, sizeof(*elts), 0,
+	struct txq_wr (*elts_wr)[elts_n] =
+		rte_calloc_socket("TXQ WRs", 1, sizeof(*elts_wr), 0,
+				  txq->socket);
+	struct txq_buf (*elts_buf)[elts_n] =
+		rte_calloc_socket("TXQ buffers", 1, sizeof(*elts_buf), 0,
 				  txq->socket);
 	int ret = 0;
 
-	if (elts == NULL) {
+	if ((elts_wr == NULL) || (elts_buf == NULL)) {
 		DEBUG("%p: can't allocate packets array", (void *)txq);
 		ret = ENOMEM;
 		goto error;
 	}
 	for (i = 0; (i != elts_n); ++i) {
-		struct txq_elt *elt = &(*elts)[i];
-		struct ibv_send_wr *wr = &elt->wr;
-		struct ibv_sge (*sges)[(elemof(elt->sges))] = &elt->sges;
+		struct txq_wr *elt_wr = &(*elts_wr)[i];
+		struct txq_buf *elt_buf = &(*elts_buf)[i];
+		struct ibv_send_wr *wr = &elt_wr->wr;
+		struct ibv_sge (*sges)[elemof(elt_wr->sges)] = &elt_wr->sges;
 
 		/* These two arrays must have the same size. */
-		assert(elemof(elt->sges) == elemof(elt->bufs));
+		assert(elemof(elt_wr->sges) == elemof(elt_buf->bufs));
 		/* Configure WR. */
 		wr->wr_id = i;
 		wr->sg_list = &(*sges)[0];
@@ -498,12 +507,14 @@ txq_alloc_elts(struct txq *txq, unsigned int elts_n)
 		wr->next = NULL;
 		wr->num_sge = elemof(*sges);
 		wr->send_flags = IBV_SEND_SIGNALED;
-		/* The same applies to elt->sges, elt->bufs and elt->comp. */
+		/* The same applies to elt_wr->sges and elt_buf. */
+		(void)elt_buf;
 	}
 	DEBUG("%p: allocated and configured %u WRs (%zu segments)",
-	      (void *)txq, elts_n, (elts_n * elemof((*elts)[0].sges)));
+	      (void *)txq, elts_n, (elts_n * elemof((*elts_wr)[0].sges)));
 	txq->elts_n = elts_n;
-	txq->elts = elts;
+	txq->elts_wr = elts_wr;
+	txq->elts_buf = elts_buf;
 	txq->elts_cur = 0;
 	txq->elts_comp = 0;
 	txq->elts_used = 0;
@@ -511,7 +522,10 @@ txq_alloc_elts(struct txq *txq, unsigned int elts_n)
 	assert(ret == 0);
 	return 0;
 error:
-	rte_free(elts);
+	if (elts_wr != NULL)
+		rte_free(elts_wr);
+	if (elts_buf != NULL)
+		rte_free(elts_buf);
 	DEBUG("%p: failed, freed everything", (void *)txq);
 	assert(ret != 0);
 	return ret;
@@ -522,25 +536,29 @@ txq_free_elts(struct txq *txq)
 {
 	unsigned int i;
 	unsigned int elts_n = txq->elts_n;
-	struct txq_elt (*elts)[elts_n] = txq->elts;
+	struct txq_wr (*elts_wr)[elts_n] = txq->elts_wr;
+	struct txq_buf (*elts_buf)[elts_n] = txq->elts_buf;
 
 	DEBUG("%p: freeing WRs", (void *)txq);
 	txq->elts_n = 0;
-	txq->elts = NULL;
-	if (elts == NULL)
+	txq->elts_wr = NULL;
+	txq->elts_buf = NULL;
+	if (elts_wr != NULL)
+		rte_free(elts_wr);
+	if (elts_buf == NULL)
 		return;
-	for (i = 0; (i != elemof(*elts)); ++i) {
+	for (i = 0; (i != elemof(*elts_buf)); ++i) {
 		unsigned int j;
-		struct txq_elt *elt = &(*elts)[i];
+		struct txq_buf *elt_buf = &(*elts_buf)[i];
 
-		for (j = 0; (j != elemof(elt->bufs)); ++j) {
-			struct rte_mbuf *buf = elt->bufs[j];
+		for (j = 0; (j != elemof(elt_buf->bufs)); ++j) {
+			struct rte_mbuf *buf = elt_buf->bufs[j];
 
 			if (buf != NULL)
 				rte_pktmbuf_free_seg(buf);
 		}
 	}
-	rte_free(elts);
+	rte_free(elts_buf);
 }
 
 static void
@@ -595,24 +613,35 @@ txq_complete(struct txq *txq)
 	}
 	/* Clear lost completion events. */
 	while (unlikely(txq->lost_comp != NULL)) {
-		int j;
-		struct txq_elt *elt = txq->lost_comp;
-		struct ibv_send_wr *wr = &elt->wr;
-		struct rte_mbuf *(*bufs)[(elemof(elt->sges))] = &elt->bufs;
+		unsigned int j = 0;
+		struct txq_buf *elt_buf = txq->lost_comp;
+		struct rte_mbuf *(*bufs)[elemof(elt_buf->bufs)] =
+			&elt_buf->bufs;
 
-		txq->lost_comp = elt->comp;
+		txq->lost_comp = elt_buf->comp;
 		assert(elts_used != 0);
 		assert(elts_free != txq->elts_n);
-		assert(wr->num_sge > 0);
-		for (j = 0; (j != wr->num_sge); ++j)
-			rte_pktmbuf_free_seg((*bufs)[j]);
+		/* There's at least one valid buffer. */
+		assert((*bufs)[0] != NULL);
+		do {
+			struct rte_mbuf *buf = (*bufs)[j];
+
+			/* Buffer pointer must be NULL because we don't use
+			 * wr->num_sge to check how many packets are actually
+			 * there. */
+			(*bufs)[j] = NULL;
+			rte_pktmbuf_free_seg(buf);
+			++j;
+		}
+		while ((j < elemof(*bufs)) && ((*bufs)[j] != NULL));
 		--elts_used;
 		++elts_free;
 	}
 	for (i = 0; (i != wcs_n); ++i) {
 		struct ibv_wc *wc = &wcs[i];
 		uint64_t wr_id = wc->wr_id;
-		struct txq_elt *elt = &(*txq->elts)[wr_id];
+		struct txq_wr *elt_wr = &(*txq->elts_wr)[wr_id];
+		struct txq_buf *elt_buf = &(*txq->elts_buf)[wr_id];
 
 		assert(wr_id < txq->elts_n);
 		if (unlikely(wc->status != IBV_WC_SUCCESS)) {
@@ -637,34 +666,37 @@ txq_complete(struct txq *txq)
 		 */
 		/* Free all buffers associated to this completion event. */
 		do {
-			int j;
-			struct ibv_send_wr *wr = &elt->wr;
-			struct rte_mbuf *(*bufs)[(elemof(elt->sges))] =
-				&elt->bufs;
+			unsigned int j = 0;
+			struct rte_mbuf *(*bufs)[elemof(elt_buf->bufs)] =
+				&elt_buf->bufs;
 
 			assert(elts_used != 0);
 			assert(elts_free != txq->elts_n);
-			assert(wr->num_sge > 0);
-			assert((unsigned int)wr->num_sge <= elemof(elt->sges));
-			for (j = 0; (j != wr->num_sge); ++j) {
+			/* There's at least one valid buffer. */
+			assert((*bufs)[0] != NULL);
+			do {
 				struct rte_mbuf *buf = (*bufs)[j];
 
-				assert(buf != NULL);
-#ifndef NDEBUG
+				/* Buffer pointer must be NULL. */
 				(*bufs)[j] = NULL;
+#ifndef NDEBUG
 				/* Make sure this segment is unlinked. */
 				buf->pkt.next = NULL;
 				/* SGE poisoning shouldn't hurt. */
-				memset(&elt->sges[j], 0x44,
-				       sizeof(elt->sges[j]));
+				memset(&elt_wr->sges[j], 0x44,
+				       sizeof(elt_wr->sges[j]));
+#else
+				(void)elt_wr;
 #endif
 				rte_pktmbuf_free_seg(buf);
+				++j;
 			}
+			while ((j < elemof(*bufs)) && ((*bufs)[j] != NULL));
 			--elts_used;
 			++elts_free;
-			elt = elt->comp;
+			elt_buf = elt_buf->comp;
 		}
-		while (unlikely(elt != NULL));
+		while (unlikely(elt_buf != NULL));
 		assert(elts_comp != 0);
 		--elts_comp;
 	}
@@ -737,8 +769,9 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	struct txq *txq = (struct txq *)dpdk_txq;
 	struct ibv_send_wr head;
 	struct ibv_send_wr **wr_next = &head.next;
-	struct txq_elt *elt_prev = NULL;
-	struct txq_elt (*elts)[txq->elts_n] = txq->elts;
+	struct txq_buf *elt_prev = NULL;
+	struct txq_buf (*elts_buf)[txq->elts_n] = txq->elts_buf;
+	struct txq_wr (*elts_wr)[txq->elts_n] = txq->elts_wr;
 	struct ibv_send_wr *bad_wr;
 	unsigned int elts_cur = txq->elts_cur;
 	unsigned int i;
@@ -762,15 +795,16 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		max = pkts_n;
 	dropped = 0;
 	for (i = 0; (i != max); ++i) {
-		struct txq_elt *elt = &(*elts)[elts_cur];
-		struct ibv_send_wr *wr = &elt->wr;
+		struct txq_buf *elt_buf = &(*elts_buf)[elts_cur];
+		struct txq_wr *elt_wr = &(*elts_wr)[elts_cur];
+		struct ibv_send_wr *wr = &elt_wr->wr;
 		struct rte_mbuf *buf;
 		unsigned int seg_n = 0;
 		unsigned int sent_size = 0;
 
 		assert(elts_cur < txq->elts_n);
 		assert(wr->wr_id == elts_cur);
-		assert(wr->sg_list == elt->sges);
+		assert(wr->sg_list == elt_wr->sges);
 		assert(wr->opcode == IBV_WR_SEND);
 		/* Link WRs together for ibv_post_send(). */
 		*wr_next = wr;
@@ -778,16 +812,16 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		/* Link elements together in order to register a single
 		 * completion event per burst of packets. */
 		wr->send_flags &= ~IBV_SEND_SIGNALED;
-		elt->comp = elt_prev;
-		elt_prev = elt;
+		elt_buf->comp = elt_prev;
+		elt_prev = elt_buf;
 		/* Register each segment as SGEs. */
 		for (buf = pkts[i];
-		     ((buf != NULL) && (seg_n != elemof(elt->sges)));
+		     ((buf != NULL) && (seg_n != elemof(elt_wr->sges)));
 		     buf = buf->pkt.next) {
-			struct ibv_sge *sge = &elt->sges[seg_n];
+			struct ibv_sge *sge = &elt_wr->sges[seg_n];
 			uint32_t lkey;
 
-			/* Retrive Memory Region key for this memory pool. */
+			/* Retrieve Memory Region key for this memory pool. */
 			lkey = txq_mp2mr(txq, buf->pool);
 			if (unlikely(lkey == (uint32_t)-1)) {
 				/* MR doesn't exist, stop here. */
@@ -799,7 +833,7 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 				     (buf != pkts[i])))
 				continue;
 			/* Update SGE. */
-			elt->bufs[seg_n] = buf;
+			elt_buf->bufs[seg_n] = buf;
 			sge->addr = (uintptr_t)buf->pkt.data;
 			rte_prefetch0((volatile void *)sge->addr);
 			sge->length = buf->pkt.data_len;
@@ -816,7 +850,7 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 #endif
 		if (unlikely(buf != NULL)) {
 			DEBUG("too many segments for packet (maximum is %zu)",
-			      elemof(elt->sges));
+			      elemof(elt_wr->sges));
 			/* Ignore this packet. */
 			++dropped;
 			rte_pktmbuf_free(pkts[i]);
@@ -853,15 +887,23 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	assert(i == max);
 	err = ibv_post_send(txq->qp, head.next, &bad_wr);
 	if (unlikely(err)) {
-		struct txq_elt *bad = containerof(bad_wr, struct txq_elt, wr);
-		struct txq_elt *first = bad;
+		unsigned int bad = (containerof(bad_wr, struct txq_wr, wr) -
+				    &(*txq->elts_wr)[0]);
+		struct txq_wr *bad_elt_wr = &(*txq->elts_wr)[bad];
+		struct txq_wr *elt_wr = bad_elt_wr;
+		struct txq_buf *bad_elt_buf = &(*txq->elts_buf)[bad];
+		struct txq_buf *elt_buf = bad_elt_buf;
 
-		/* Number of packets that will be sent. */
+		/* Recalculate the number of empty packets dropped from the
+		 * previous loop and rewind elt_buf and elt_wr at the same
+		 * time. */
 		dropped = 0;
-		for (i = 0; (first->comp != NULL); ++i) {
-			if (first->wr.num_sge == 0)
+		for (i = 0; (elt_buf->comp != NULL); ++i) {
+			if (elt_wr->wr.num_sge == 0)
 				++dropped;
-			first = first->comp;
+			elt_buf = elt_buf->comp;
+			elt_wr = &(*txq->elts_wr)
+				[elt_buf - &(*txq->elts_buf)[0]];
 		}
 		assert(i < max);
 		DEBUG("%p: ibv_post_send(): failed for WR %p"
@@ -874,21 +916,26 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		/* Completion event has been lost. Link these elements to the
 		 * list of those without a completion event. They will be
 		 * processed the next time a completion event is received. */
-		assert(first->comp == NULL);
-		if (bad->comp != NULL) {
-			first->comp = txq->lost_comp;
-			txq->lost_comp = bad->comp;
+		assert(elt_buf->comp == NULL);
+		if (bad_elt_buf->comp != NULL) {
+			elt_buf->comp = txq->lost_comp;
+			txq->lost_comp = bad_elt_buf->comp;
 		}
 		else
-			assert(bad == first);
+			assert(bad_elt_buf == elt_buf);
 #ifdef MLX4_PMD_SOFT_COUNTERS
 		/* Decrement packets and bytes counters for each element that
 		 * won't be sent. */
-		while (bad != NULL) {
+		while (1) {
 			--txq->stats.opackets;
-			assert(bad->bufs[0] != NULL);
-			txq->stats.obytes -= bad->bufs[0]->pkt.pkt_len;
-			bad = containerof(bad->wr.next, struct txq_elt, wr);
+			assert(bad_elt_buf->bufs[0] != NULL);
+			txq->stats.obytes -= bad_elt_buf->bufs[0]->pkt.pkt_len;
+			if (bad_elt_wr->wr.next == NULL)
+				break;
+			bad_elt_wr = containerof(bad_elt_wr->wr.next,
+						 struct txq_wr, wr);
+			bad_elt_buf = &(*txq->elts_buf)
+				[bad_elt_wr - &(*txq->elts_wr)[0]];
 		}
 #endif
 	}
