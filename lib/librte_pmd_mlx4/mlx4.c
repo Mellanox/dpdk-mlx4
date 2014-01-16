@@ -129,9 +129,9 @@ struct rxq_elt_sp {
 
 /* RX element. */
 struct rxq_elt {
-	struct ibv_recv_wr wr; /* Work Requesst. */
+	struct ibv_recv_wr wr; /* Work Request. */
 	struct ibv_sge sge; /* Scatter/Gather Element. */
-	struct rte_mbuf *buf; /* SGE buffer. */
+	/* SGE buffer is stored as the work request ID to reduce size. */
 };
 
 /* RX queue descriptor. */
@@ -1238,33 +1238,33 @@ rxq_alloc_elts(struct rxq *rxq, unsigned int elts_n)
 		struct rxq_elt *elt = &(*elts)[i];
 		struct ibv_recv_wr *wr = &elt->wr;
 		struct ibv_sge *sge = &(*elts)[i].sge;
+		struct rte_mbuf *buf = rte_pktmbuf_alloc(rxq->mp);
 
-		/* Configure WR. */
-		wr->wr_id = i;
-		wr->next = &(*elts)[(i + 1)].wr;
-		wr->sg_list = sge;
-		wr->num_sge = 1;
-		elt->buf = rte_pktmbuf_alloc(rxq->mp);
-		if (elt->buf == NULL) {
+		if (buf == NULL) {
 			DEBUG("%p: empty mbuf pool", (void *)rxq);
 			ret = ENOMEM;
 			goto error;
 		}
+		/* Configure WR. */
+		wr->wr_id = (uint64_t)buf;
+		wr->next = &(*elts)[(i + 1)].wr;
+		wr->sg_list = sge;
+		wr->num_sge = 1;
 		/* Headroom is reserved by rte_pktmbuf_alloc(). */
-		assert(((uintptr_t)elt->buf->buf_addr +
+		assert(((uintptr_t)buf->buf_addr +
 			RTE_PKTMBUF_HEADROOM) ==
-		       (uintptr_t)elt->buf->pkt.data);
+		       (uintptr_t)buf->pkt.data);
 		/* Buffer is supposed to be empty. */
-		assert(rte_pktmbuf_data_len(elt->buf) == 0);
-		assert(rte_pktmbuf_pkt_len(elt->buf) == 0);
+		assert(rte_pktmbuf_data_len(buf) == 0);
+		assert(rte_pktmbuf_pkt_len(buf) == 0);
 		/* sge->addr must be able to store a pointer. */
 		assert(sizeof(sge->addr) >= sizeof(uintptr_t));
 		/* SGE keeps its headroom. */
-		sge->addr = (uintptr_t)elt->buf->pkt.data;
-		sge->length = (elt->buf->buf_len - RTE_PKTMBUF_HEADROOM);
+		sge->addr = (uintptr_t)buf->pkt.data;
+		sge->length = (buf->buf_len - RTE_PKTMBUF_HEADROOM);
 		sge->lkey = rxq->mr->lkey;
 		/* Redundant check for tailroom. */
-		assert(sge->length == rte_pktmbuf_tailroom(elt->buf));
+		assert(sge->length == rte_pktmbuf_tailroom(buf));
 	}
 	/* The last WR pointer must be NULL. */
 	(*elts)[(i - 1)].wr.next = NULL;
@@ -1279,8 +1279,9 @@ error:
 		for (i = 0; (i != elemof(*elts)); ++i) {
 			struct rxq_elt *elt = &(*elts)[i];
 
-			if (elt->buf != NULL)
-				rte_pktmbuf_free_seg(elt->buf);
+			if ((struct rte_mbuf *)elt->wr.wr_id != NULL)
+				rte_pktmbuf_free_seg((struct rte_mbuf *)
+						     elt->wr.wr_id);
 		}
 		rte_free(elts);
 	}
@@ -1304,8 +1305,9 @@ rxq_free_elts(struct rxq *rxq)
 	for (i = 0; (i != elemof(*elts)); ++i) {
 		struct rxq_elt *elt = &(*elts)[i];
 
-		if (elt->buf != NULL)
-			rte_pktmbuf_free_seg(elt->buf);
+		if ((struct rte_mbuf *)elt->wr.wr_id != NULL)
+			rte_pktmbuf_free_seg((struct rte_mbuf *)
+					     elt->wr.wr_id);
 	}
 	rte_free(elts);
 }
@@ -1850,16 +1852,13 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	/* For each work completion. */
 	for (i = 0; (i != wcs_n); ++i) {
 		struct ibv_wc *wc = &wcs[i];
-		uint64_t wr_id = wc->wr_id;
 		uint32_t len = wc->byte_len;
-		struct rxq_elt *elt = &(*elts)[wr_id];
+		struct rxq_elt *elt = &(*elts)[i];
 		struct ibv_recv_wr *wr = &elt->wr;
-		struct rte_mbuf *seg = elt->buf;
+		struct rte_mbuf *seg = (struct rte_mbuf *)wc->wr_id;
 		struct rte_mbuf *rep;
 
 		/* Sanity checks. */
-		assert(wr_id < rxq->elts_n);
-		assert(wr_id == wr->wr_id);
 		assert(wr->sg_list == &elt->sge);
 		assert(wr->num_sge == 1);
 		/* Link completed WRs together for repost. */
@@ -1890,7 +1889,7 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			 */
 			DEBUG("rxq=%p, wr_id=%" PRIu64 ":"
 			      " can't allocate a new mbuf",
-			      (void *)rxq, wr_id);
+			      (void *)rxq, wc->wr_id);
 			/* Increase out of memory counters. */
 			++rxq->stats.rx_nombuf;
 			++rxq->priv->dev->data->rx_mbuf_alloc_failed;
@@ -1900,7 +1899,7 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		/* Reconfigure sge to use rep instead of seg. */
 		elt->sge.addr = (uintptr_t)rep->buf_addr + RTE_PKTMBUF_HEADROOM;
 		assert(elt->sge.lkey == rxq->mr->lkey);
-		elt->buf = rep;
+		wr->wr_id = (uint64_t)rep;
 
 		/* Update seg information. */
 		seg->pkt.data = (char *)seg->buf_addr + RTE_PKTMBUF_HEADROOM;
