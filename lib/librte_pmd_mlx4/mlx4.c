@@ -181,6 +181,9 @@ struct txq {
 	} mp2mr[MLX4_PMD_TX_MP_CACHE]; /* MP to MR translation table. */
 	struct ibv_cq *cq; /* Completion Queue. */
 	struct ibv_qp *qp; /* Queue Pair. */
+#if MLX4_PMD_MAX_INLINE > 0
+	uint32_t max_inline; /* Max inline send size <= MLX4_PMD_MAX_INLINE. */
+#endif
 	unsigned int elts_n; /* (*elts)[] length. */
 	struct txq_elt (*elts)[]; /* TX elements. */
 	unsigned int elts_cur; /* Current index in (*elts)[]. */
@@ -763,6 +766,7 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		struct ibv_send_wr *wr = &elt->wr;
 		struct rte_mbuf *buf;
 		unsigned int seg_n = 0;
+		unsigned int sent_size = 0;
 
 		assert(elts_cur < txq->elts_n);
 		assert(wr->wr_id == elts_cur);
@@ -800,13 +804,16 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			rte_prefetch0((volatile void *)sge->addr);
 			sge->length = buf->pkt.data_len;
 			sge->lkey = lkey;
+			sent_size += sge->length;
+			/* sent_size may be unused, silence warning. */
+			(void)sent_size;
 			/* Increase number of segments (SGEs). */
 			++seg_n;
-#ifdef MLX4_PMD_SOFT_COUNTERS
-			/* Increase sent bytes counter. */
-			txq->stats.obytes += sge->length;
-#endif
 		}
+#ifdef MLX4_PMD_SOFT_COUNTERS
+		/* Increment sent bytes counter. */
+		txq->stats.obytes += sent_size;
+#endif
 		if (unlikely(buf != NULL)) {
 			DEBUG("too many segments for packet (maximum is %zu)",
 			      elemof(elt->sges));
@@ -819,6 +826,12 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		}
 		/* Update WR. */
 		wr->num_sge = seg_n;
+#if MLX4_PMD_MAX_INLINE > 0
+		if (sent_size <= txq->max_inline)
+			wr->send_flags |= IBV_SEND_INLINE;
+		else
+			wr->send_flags &= ~IBV_SEND_INLINE;
+#endif
 		/* Update WR index. */
 		if (unlikely(++elts_cur == txq->elts_n))
 			elts_cur = 0;
@@ -940,7 +953,10 @@ txq_setup(struct rte_eth_dev *dev, struct txq *txq, uint16_t desc,
 			.max_send_sge = ((priv->device_attr.max_sge <
 					  MLX4_PMD_SGE_WR_N) ?
 					 priv->device_attr.max_sge :
-					 MLX4_PMD_SGE_WR_N)
+					 MLX4_PMD_SGE_WR_N),
+#if MLX4_PMD_MAX_INLINE > 0
+			.max_inline_data = MLX4_PMD_MAX_INLINE,
+#endif
 		},
 		.qp_type = IBV_QPT_RAW_PACKET,
 		/* Do *NOT* enable this, completions events are managed per
@@ -954,6 +970,10 @@ txq_setup(struct rte_eth_dev *dev, struct txq *txq, uint16_t desc,
 		      (void *)dev, strerror(ret));
 		goto error;
 	}
+#if MLX4_PMD_MAX_INLINE > 0
+	/* ibv_create_qp() updates this value. */
+	tmpl.max_inline = attr.init.cap.max_inline_data;
+#endif
 	attr.mod = (struct ibv_qp_attr){
 		/* Move the QP to this state. */
 		.qp_state = IBV_QPS_INIT,

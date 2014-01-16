@@ -17,13 +17,19 @@ LIB = librte_pmd_mlx4.a
 CFLAGS += -O3 -std=gnu99 -Wall -Wextra -fPIC
 CFLAGS += $(WERROR_FLAGS)
 CFLAGS += -D_XOPEN_SOURCE=600
+
 ifeq ($(CONFIG_RTE_LIBRTE_MLX4_DEBUG),y)
 CFLAGS += -pedantic -g -UNDEBUG -DPEDANTIC
 else
 CFLAGS += -DNDEBUG -UPEDANTIC
 endif
+
 ifdef CONFIG_RTE_LIBRTE_MLX4_SGE_WR_N
 CFLAGS += -DMLX4_PMD_SGE_WR_N=$(CONFIG_RTE_LIBRTE_MLX4_SGE_WR_N)
+endif
+
+ifdef CONFIG_RTE_LIBRTE_MLX4_MAX_INLINE
+CFLAGS += -DMLX4_PMD_MAX_INLINE=$(CONFIG_RTE_LIBRTE_MLX4_MAX_INLINE)
 endif
 
 # DPDK specifies -march=native by default which implicitly uses -mtune=native.
@@ -65,6 +71,10 @@ endif
 
 ifdef MLX4_PMD_SGE_WR_N
 CFLAGS += -DMLX4_PMD_SGE_WR_N=$(MLX4_PMD_SGE_WR_N)
+endif
+
+ifdef MLX4_PMD_MAX_INLINE
+CFLAGS += -DMLX4_PMD_MAX_INLINE=$(MLX4_PMD_MAX_INLINE)
 endif
 
 LDFLAGS += -shared
