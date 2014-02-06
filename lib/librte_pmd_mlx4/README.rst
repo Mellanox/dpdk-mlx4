@@ -6,20 +6,20 @@
 About the Mellanox ConnectX-3 DPDK poll-mode driver
 ===================================================
 
-:abbr:`DPDK (Data Plane Development Kit)` :abbr:`PMD (Poll-Mode Driver)` for Mellanox ConnectX-3 Ethernet adapters.
+DPDK PMD for Mellanox ConnectX-3 Ethernet adapters.
 
 This driver is based on *libibverbs* and currently supports:
 
 - Scattering/gathering RX/TX packets
-- Multiple RX (with :abbr:`RSS (Receive-Side Scaling)`/RCA) and TX queues
+- Multiple RX (with RSS/RCA) and TX queues
 - Multiple MAC addresses
 - VLAN filtering
 - Link state information
 - Software counters/statistics
 - Start/stop/close operations
-- Multiple physical ports host adapter (requires a :abbr:`DPDK (Data Plane Development Kit)` patch)
-- :abbr:`DPDK (Data Plane Development Kit)` 1.2.2 (6WIND or Intel)
-- :abbr:`DPDK (Data Plane Development Kit)` 1.3.0 (6WIND or Intel)
+- Multiple physical ports host adapter (requires a DPDK patch)
+- DPDK 1.2.2 (6WIND or Intel)
+- DPDK 1.3.0 (6WIND or Intel)
 
 Known limitations
 -----------------
@@ -59,7 +59,7 @@ applies to its headers location (*-I*).
 
 Other requirements:
 
-- A supported Intel (or 6WIND-provided) :abbr:`DPDK (Data Plane Development Kit)` version
+- A supported Intel (or 6WIND-provided) DPDK version
 - An up-to-date GCC-based toolchain
 
 Usage
@@ -76,7 +76,7 @@ The following examples assume a machine configured with two dual-port
 adapters (4 ports total), on which the second ports are connected to each
 other using a crossover cable (40Gbps speed).
 
-Run *testpmd* interactively from the :abbr:`DPDK (Data Plane Development Kit)` build tree (for more information
+Run *testpmd* interactively from the DPDK build tree (for more information
 about command-line options, see the corresponding documentation)::
 
  # ~/DPDK/build/app/testpmd -c 0x600 -n 4 -- -i # internal
@@ -117,10 +117,10 @@ about command-line options, see the corresponding documentation)::
 
 As previously described:
 
-- :abbr:`DPDK (Data Plane Development Kit)` port 0 is adapter 1 port 1, connected to another host at 10Gbps.
-- :abbr:`DPDK (Data Plane Development Kit)` port 1 is adapter 1 port 2, connected to :abbr:`DPDK (Data Plane Development Kit)` port 3 at 40Gbps.
-- :abbr:`DPDK (Data Plane Development Kit)` port 2 is adapter 2 port 1, connected to another host at 10Gbps.
-- :abbr:`DPDK (Data Plane Development Kit)` port 3 is adapter 2 port 2, connected to :abbr:`DPDK (Data Plane Development Kit)` port 1 at 40Gbps.
+- DPDK port 0 is adapter 1 port 1, connected to another host at 10Gbps.
+- DPDK port 1 is adapter 1 port 2, connected to DPDK port 3 at 40Gbps.
+- DPDK port 2 is adapter 2 port 1, connected to another host at 10Gbps.
+- DPDK port 3 is adapter 2 port 2, connected to DPDK port 1 at 40Gbps.
 
 The following commands are typed from the *testpmd* interactive prompt.
 
@@ -181,7 +181,7 @@ The following commands are typed from the *testpmd* interactive prompt.
      qinq(extend) off
    testpmd>
 
-- Check ports status after disconnecting :abbr:`DPDK (Data Plane Development Kit)` port 3 by manually removing
+- Check ports status after disconnecting DPDK port 3 by manually removing
   its QSFP adapter::
 
    testpmd> show port info all
@@ -239,9 +239,9 @@ The following commands are typed from the *testpmd* interactive prompt.
      qinq(extend) off
    testpmd>
 
-  :abbr:`DPDK (Data Plane Development Kit)` port 1, which still has its QSFP adapter, shows a 40Gbps link speed
-  with status "down", while :abbr:`DPDK (Data Plane Development Kit)` port 3 only shows a 10Gbps link speed due
-  to the missing QSFP adapter. :abbr:`DPDK (Data Plane Development Kit)` ports 0 and 2 are obviously unaffected
+  DPDK port 1, which still has its QSFP adapter, shows a 40Gbps link speed
+  with status "down", while DPDK port 3 only shows a 10Gbps link speed due
+  to the missing QSFP adapter. DPDK ports 0 and 2 are obviously unaffected
   by this.
 
 - Plug it back and start MAC forwarding between ports 1 and 3::
@@ -260,7 +260,7 @@ The following commands are typed from the *testpmd* interactive prompt.
      TX RS bit threshold=0 - TXQ flags=0x0
    testpmd>
 
-- In the following examples, *eth18* and *eth19* are equivalent to :abbr:`DPDK (Data Plane Development Kit)`
+- In the following examples, *eth18* and *eth19* are equivalent to DPDK
   ports 1 and 3, respectively. Commands are entered from another terminal
   while *testpmd* is still running::
 
@@ -394,18 +394,18 @@ Compilation
 Internal
 --------
 
-In this mode, *librte_pmd_mlx4* is compiled at the same time as the :abbr:`DPDK (Data Plane Development Kit)`
+In this mode, *librte_pmd_mlx4* is compiled at the same time as the DPDK
 and internally linked with it.
 
-A few Makefiles and source files in the :abbr:`DPDK (Data Plane Development Kit)` must be patched first
+A few Makefiles and source files in the DPDK must be patched first
 to include the new driver. This patch is provided separately.
 
-Other patches (also provided separately for :abbr:`DPDK (Data Plane Development Kit)` 1.2.2 and :abbr:`DPDK (Data Plane Development Kit)` 1.3.0) may be
+Other patches (also provided separately for DPDK 1.2.2 and DPDK 1.3.0) may be
 necessary:
 
 - a patch to fix compilation warnings/errors when debugging is enabled,
-- a patch to allow the :abbr:`DPDK (Data Plane Development Kit)` to manage more than one single physical port
-  per adapter (the :abbr:`DPDK (Data Plane Development Kit)` normally expects one PCI bus address per port).
+- a patch to allow the DPDK to manage more than one single physical port
+  per adapter (the DPDK normally expects one PCI bus address per port).
 
 The driver itself must be unpacked in the *lib/* subdirectory, alongside
 IGB and IXGBE drivers (*librte_pmd_igb* and *librte_pmd_ixgbe*).
@@ -439,7 +439,7 @@ IGB and IXGBE drivers (*librte_pmd_igb* and *librte_pmd_ixgbe*).
  lrwxrwxrwx 1 root root   20 May 27 13:49 librte_pmd_mlx4 -> librte_pmd_mlx4-1.10
  drwxrwxr-x 2 root root 4096 May 23 11:48 librte_pmd_mlx4-1.10
 
-The :abbr:`DPDK (Data Plane Development Kit)` is now ready to be configured/compiled and installed. For more information, see the corresponding installation procedure. The configuration templates include
+The DPDK is now ready to be configured/compiled and installed. For more information, see the corresponding installation procedure. The configuration templates include
 *librte_pmd_mlx4* by default.
 
 Configuration/compilation example::
@@ -469,13 +469,13 @@ Compilation
 -----------
 
 In this mode, *librte_pmd_mlx4* is compiled independently as a shared
-object. The :abbr:`DPDK (Data Plane Development Kit)` source tree is only required for its headers.
+object. The DPDK source tree is only required for its headers.
 
 .. note::
 
-   This mode is only supported by 6WIND :abbr:`DPDK (Data Plane Development Kit)`.
+   This mode is only supported by 6WIND DPDK.
 
-Once :abbr:`DPDK (Data Plane Development Kit)` is compiled, *librte_pmd_mlx4* can be unpacked elsewhere and
+Once DPDK is compiled, *librte_pmd_mlx4* can be unpacked elsewhere and
 compiled::
 
  # tar -xzvf /path/to/librte_pmd_mlx4-1.10.tar.gz
@@ -491,13 +491,13 @@ compiled::
 The following macros can be overridden on the command-line:
 
    RTE_SDK
-      :abbr:`DPDK (Data Plane Development Kit)` source tree location (mandatory).
+      DPDK source tree location (mandatory).
    RTE_TARGET
-      :abbr:`DPDK (Data Plane Development Kit)` output directory for generated files (default: *build*).
+      DPDK output directory for generated files (default: *build*).
    DEBUG
       If *1*, enable driver debugging.
    DPDK_6WIND
-      If *1*, enable 6WIND :abbr:`DPDK (Data Plane Development Kit)` extensions.
+      If *1*, enable 6WIND DPDK extensions.
    MLX4_PMD_SGE_WR_N
       Change the maximum number of
       scatter/gather elements per work request. The minimum value is 1, which
