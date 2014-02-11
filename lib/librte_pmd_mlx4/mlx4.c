@@ -1980,7 +1980,6 @@ rxq_setup_qp_rss(struct priv *priv, struct ibv_cq *cq, uint16_t desc,
 		/* TSS isn't necessary. */
 		attr.qpg.parent_attrib.tss_child_count = 0;
 		attr.qpg.parent_attrib.rss_child_count = priv->rxqs_n;
-		attr.qpg.qpg_parent = NULL;
 		DEBUG("initializing parent RSS queue");
 	}
 	else {
