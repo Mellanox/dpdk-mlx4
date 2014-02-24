@@ -60,6 +60,9 @@ config.h: comp_check.sh
 	CC="$(CC)" CFLAGS="$(CFLAGS)" sh -- $< \
 		$@ RSS_SUPPORT \
 		infiniband/verbs.h enum IBV_EXP_DEVICE_UD_RSS
+	CC="$(CC)" CFLAGS="$(CFLAGS)" sh -- $< \
+		$@ SEND_RAW_WR_SUPPORT \
+		infiniband/verbs.h type 'struct ibv_send_wr_raw'
 
 $(OBJ): $(SRC) $(HDR) config.h
 

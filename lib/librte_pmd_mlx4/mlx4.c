@@ -70,6 +70,15 @@
 #error Hardware counters not implemented, MLX4_PMD_SOFT_COUNTERS is required.
 #endif
 
+/* If raw send operations are available, use them since they are faster. */
+#ifdef SEND_RAW_WR_SUPPORT
+typedef struct ibv_send_wr_raw mlx4_send_wr_t;
+#define mlx4_post_send ibv_post_send_raw
+#else
+typedef struct ibv_send_wr mlx4_send_wr_t;
+#define mlx4_post_send ibv_post_send
+#endif
+
 /* 6WIND/Intel DPDK compatibility. */
 #ifndef DPDK_6WIND
 
@@ -162,7 +171,7 @@ struct rxq {
 
 /* TX Work Request element. */
 struct txq_wr {
-	struct ibv_send_wr wr; /* Work Request. */
+	mlx4_send_wr_t wr; /* Work Request. */
 	struct ibv_sge sges[MLX4_PMD_SGE_WR_N]; /* Scatter/Gather Elements. */
 };
 
@@ -491,7 +500,7 @@ txq_alloc_elts(struct txq *txq, unsigned int elts_n)
 	for (i = 0; (i != elts_n); ++i) {
 		struct txq_wr *elt_wr = &(*elts_wr)[i];
 		struct txq_buf *elt_buf = &(*elts_buf)[i];
-		struct ibv_send_wr *wr = &elt_wr->wr;
+		mlx4_send_wr_t *wr = &elt_wr->wr;
 		struct ibv_sge (*sges)[elemof(elt_wr->sges)] = &elt_wr->sges;
 
 		/* These two arrays must have the same size. */
@@ -765,12 +774,12 @@ static uint16_t
 mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 {
 	struct txq *txq = (struct txq *)dpdk_txq;
-	struct ibv_send_wr head;
-	struct ibv_send_wr **wr_next = &head.next;
+	mlx4_send_wr_t head;
+	mlx4_send_wr_t **wr_next = &head.next;
 	struct txq_buf *elt_prev = NULL;
 	struct txq_buf (*elts_buf)[txq->elts_n] = txq->elts_buf;
 	struct txq_wr (*elts_wr)[txq->elts_n] = txq->elts_wr;
-	struct ibv_send_wr *bad_wr;
+	mlx4_send_wr_t *bad_wr;
 	unsigned int elts_cur = txq->elts_cur;
 	unsigned int i;
 	unsigned int max;
@@ -795,7 +804,7 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	for (i = 0; (i != max); ++i) {
 		struct txq_buf *elt_buf = &(*elts_buf)[elts_cur];
 		struct txq_wr *elt_wr = &(*elts_wr)[elts_cur];
-		struct ibv_send_wr *wr = &elt_wr->wr;
+		mlx4_send_wr_t *wr = &elt_wr->wr;
 		struct rte_mbuf *buf;
 		unsigned int seg_n = 0;
 		unsigned int sent_size = 0;
@@ -879,11 +888,11 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		return 0;
 	*wr_next = NULL;
 	/* The last WR is the only one asking for a completion event. */
-	containerof(wr_next, struct ibv_send_wr, next)->
+	containerof(wr_next, mlx4_send_wr_t, next)->
 		send_flags |= IBV_SEND_SIGNALED;
 	/* Make sure all packets have been processed in the previous loop. */
 	assert(i == max);
-	err = ibv_post_send(txq->qp, head.next, &bad_wr);
+	err = mlx4_post_send(txq->qp, head.next, &bad_wr);
 	if (unlikely(err)) {
 		unsigned int bad = (containerof(bad_wr, struct txq_wr, wr) -
 				    &(*txq->elts_wr)[0]);
@@ -904,7 +913,7 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 				[elt_buf - &(*txq->elts_buf)[0]];
 		}
 		assert(i < max);
-		DEBUG("%p: ibv_post_send(): failed for WR %p"
+		DEBUG("%p: mlx4_post_send(): failed for WR %p"
 		      " (only %u (%u dropped) out of %u WR(s) posted): %s",
 		      (void *)txq->priv, (void *)bad_wr, i, dropped, max,
 		      ((err <= -1) ? "Internal error" : strerror(err)));
