@@ -60,10 +60,8 @@
 #pragma GCC diagnostic error "-pedantic"
 #endif
 
-/* Force this to 0 for libibverbs versions lacking RSS support. */
-#ifndef RSS_SUPPORT
-#define RSS_SUPPORT 1
-#endif
+/* System configuration header. */
+#include "config.h"
 
 /* PMD header. */
 #include "mlx4.h"

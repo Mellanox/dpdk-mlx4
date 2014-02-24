@@ -20,6 +20,7 @@ OBJ = $(SRC:.c=.o)
 
 CC = gcc
 CFLAGS += -I$(RTE_SDK)/$(RTE_TARGET)/include
+CFLAGS += -I$(O)
 CFLAGS += -O3 -std=gnu99 -Wall -Wextra -fPIC
 CFLAGS += -D_XOPEN_SOURCE=600
 CFLAGS += -g
@@ -54,13 +55,19 @@ doc-%: FORCE
 		DESTDIR=$(abspath $(DESTDIR))$(docdir) \
 		$*
 
-$(OBJ): $(SRC) $(HDR)
+config.h: comp_check.sh
+	$(RM) $@
+	CC="$(CC)" CFLAGS="$(CFLAGS)" sh -- $< \
+		$@ RSS_SUPPORT \
+		infiniband/verbs.h enum IBV_EXP_DEVICE_UD_RSS
+
+$(OBJ): $(SRC) $(HDR) config.h
 
 $(OUT): $(OBJ)
 	$(CC) $(LDFLAGS) -o $(OUT) $(OBJ)
 
 clean:
-	$(RM) $(OUT) $(OBJ)
+	$(RM) $(OUT) $(OBJ) config.h
 
 warn:
 ifeq ($(RTE_SDK),)
