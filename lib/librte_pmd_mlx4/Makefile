@@ -40,7 +40,7 @@ CFLAGS += -DMLX4_PMD_MAX_INLINE=$(MLX4_PMD_MAX_INLINE)
 endif
 
 LDFLAGS += -shared
-LDFLAGS += -libverbs
+LIBS += -libverbs
 
 all: warn $(OUT)
 
@@ -67,7 +67,7 @@ config.h: comp_check.sh
 $(OBJ): $(SRC) $(HDR) config.h
 
 $(OUT): $(OBJ)
-	$(CC) $(LDFLAGS) -o $(OUT) $(OBJ)
+	$(CC) $(LDFLAGS) -o $(OUT) $(OBJ) $(LIBS)
 
 clean:
 	$(RM) $(OUT) $(OBJ) config.h
