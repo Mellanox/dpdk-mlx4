@@ -3433,11 +3433,7 @@ mlx4_generic_init(struct eth_driver *drv, struct rte_eth_dev *dev, int probe)
 		DEBUG("bad state for port %d: \"%s\" (%d)",
 		      port, ibv_port_state_str(port_attr.state),
 		      port_attr.state);
-	if (probe) {
-		ibv_close_device(ctx);
-		ctx = NULL;
-	}
-	else {
+	if (!probe) {
 		/* Allocate protection domain. */
 		pd = ibv_alloc_pd(ctx);
 		if (pd == NULL) {
@@ -3518,6 +3514,10 @@ mlx4_generic_init(struct eth_driver *drv, struct rte_eth_dev *dev, int probe)
 	if (priv_ifreq(priv, SIOCGIFMTU, &ifr) == 0)
 		priv->mtu = ifr.ifr_mtu;
 	DEBUG("port %u MTU is %u", priv->port, priv->mtu);
+	if (probe) {
+		priv->ctx = NULL;
+		ibv_close_device(ctx);
+	}
 	return 0;
 error:
 	err = errno;
