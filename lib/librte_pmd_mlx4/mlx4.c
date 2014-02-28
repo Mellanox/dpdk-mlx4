@@ -2544,6 +2544,10 @@ mlx4_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *info)
 	 */
 	max = ((max > elemof(removed_queue)) ? elemof(removed_queue) : max);
 #endif /* BUILT_DPDK_VERSION */
+	/* If max >= 65535 then max = 0, max_rx_queues is uint16_t. */
+	if (max >= 65535) {
+		max = 65535;
+	}
 	info->max_rx_queues = max;
 	info->max_tx_queues = max;
 	info->max_mac_addrs = elemof(priv->mac);
