@@ -239,6 +239,7 @@ struct priv {
 #ifdef MLX4_COMPAT_VMWARE
 	unsigned int vmware:1; /* Use VMware compatibility. */
 #endif
+	unsigned int no_sriov:1; /* Optimize for non-SRIOV case. */
 	unsigned int max_rss_tbl_sz; /* Maximum number of RSS queues. */
 	/* RX/TX queues. */
 	struct rxq rxq_parent; /* Parent queue when RSS is enabled. */
@@ -846,7 +847,8 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			/* Update SGE. */
 			elt_buf->bufs[seg_n] = buf;
 			sge->addr = (uintptr_t)buf->pkt.data;
-			rte_prefetch0((volatile void *)sge->addr);
+			if (!txq->priv->no_sriov)
+				rte_prefetch0((volatile void *)sge->addr);
 			sge->length = buf->pkt.data_len;
 			sge->lkey = lkey;
 			sent_size += sge->length;
@@ -3553,9 +3555,9 @@ mlx4_generic_init(struct eth_driver *drv, struct rte_eth_dev *dev, int probe)
 #ifdef MLX4_COMPAT_VMWARE
 	if (mlx4_getenv_int("MLX4_COMPAT_VMWARE"))
 		priv->vmware = 1;
-#else /* MLX4_COMPAT_VMWARE */
-	(void)mlx4_getenv_int;
 #endif /* MLX4_COMPAT_VMWARE */
+	if (mlx4_getenv_int("MLX4_NO_SRIOV"))
+		priv->no_sriov = 1;
 	if (ibv_query_gid(ctx, port, 0, &temp_gid)) {
 		DEBUG("ibv_query_gid() failure");
 		goto error;
