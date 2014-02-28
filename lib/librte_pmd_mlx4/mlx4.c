@@ -79,8 +79,17 @@ typedef struct ibv_send_wr mlx4_send_wr_t;
 #define mlx4_post_send ibv_post_send
 #endif
 
+#ifndef DPDK_VERSION
+#define DPDK_VERSION(x, y, z) ((x) << 16 | (y) << 8 | (z))
+#endif /* DPDK_VERSION */
+
+#ifndef BUILT_DPDK_VERSION
+#define BUILT_DPDK_VERSION \
+	DPDK_VERSION(RTE_VER_MAJOR, RTE_VER_MINOR, RTE_VER_PATCH_LEVEL)
+#endif /* BUILT_DPDK_VERSION */
+
 /* 6WIND/Intel DPDK compatibility. */
-#ifndef DPDK_6WIND
+#if !defined(DPDK_6WIND) || BUILT_DPDK_VERSION >= DPDK_VERSION(1, 6, 0)
 
 struct rte_rxq_stats {
 	uint64_t ipackets;  /**< Total of successfully received packets. */
@@ -96,15 +105,6 @@ struct rte_txq_stats {
 };
 
 #endif /* DPDK_6WIND */
-
-#ifndef DPDK_VERSION
-#define DPDK_VERSION(x, y, z) ((x) << 16 | (y) << 8 | (z))
-#endif /* DPDK_VERSION */
-
-#ifndef BUILT_DPDK_VERSION
-#define BUILT_DPDK_VERSION \
-	DPDK_VERSION(RTE_VER_MAJOR, RTE_VER_MINOR, RTE_VER_PATCH_LEVEL)
-#endif /* BUILT_DPDK_VERSION */
 
 #if BUILT_DPDK_VERSION < DPDK_VERSION(1, 3, 0)
 typedef struct igb_tx_queue dpdk_txq_t;
@@ -2606,7 +2606,7 @@ mlx4_stats_reset(struct rte_eth_dev *dev)
 	priv_unlock(priv);
 }
 
-#ifdef DPDK_6WIND
+#if defined(DPDK_6WIND) && BUILT_DPDK_VERSION < DPDK_VERSION(1, 6, 0)
 
 static void
 mlx4_rxq_stats_get(struct rte_eth_dev *dev, uint16_t idx,
@@ -3195,7 +3195,7 @@ static struct eth_dev_ops mlx4_dev_ops = {
 	.link_update = mlx4_link_update,
 	.stats_get = mlx4_stats_get,
 	.stats_reset = mlx4_stats_reset,
-#ifdef DPDK_6WIND
+#if defined(DPDK_6WIND) && BUILT_DPDK_VERSION < DPDK_VERSION(1, 6, 0)
 	.rxq_stats_get = mlx4_rxq_stats_get,
 	.txq_stats_get = mlx4_txq_stats_get,
 	.rxq_stats_reset = mlx4_rxq_stats_reset,
