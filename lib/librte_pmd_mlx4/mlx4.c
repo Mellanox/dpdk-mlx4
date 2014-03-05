@@ -1392,7 +1392,6 @@ rxq_mac_addr_del(struct rxq *rxq, unsigned int mac_index)
 	      (void *)rxq,
 	      (*mac)[0], (*mac)[1], (*mac)[2], (*mac)[3], (*mac)[4], (*mac)[5],
 	      mac_index);
-	assert(rxq->mac_flow[mac_index] != NULL);
 #ifdef MLX4_COMPAT_VMWARE
 	if (priv->vmware) {
 		union ibv_gid gid = { .raw = { 0 } };
@@ -1403,6 +1402,7 @@ rxq_mac_addr_del(struct rxq *rxq, unsigned int mac_index)
 		return;
 	}
 #endif
+	assert(rxq->mac_flow[mac_index] != NULL);
 	claim_zero(ibv_destroy_flow(rxq->mac_flow[mac_index]));
 	rxq->mac_flow[mac_index] = NULL;
 	BITFIELD_RESET(rxq->mac_configured, mac_index);
