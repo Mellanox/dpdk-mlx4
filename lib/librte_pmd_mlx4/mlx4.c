@@ -3403,45 +3403,28 @@ mlx4_getenv_int(const char *name)
 static struct eth_driver mlx4_driver;
 
 static int
-mlx4_dev_init(struct eth_driver *drv, struct rte_eth_dev *dev)
+mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 {
 	struct ibv_device **list;
+	struct ibv_device *ibv_dev;
 	int err = errno;
-	uint32_t port = 1; /* ports are indexed from one */
-	uint32_t test = 1;
-	struct ibv_context *ctx = NULL;
-	struct ibv_pd *pd = NULL;
+	struct ibv_context *attr_ctx = NULL;
 	struct ibv_device_attr device_attr;
 	int idx;
 	int i;
 
-	assert(drv == &mlx4_driver);
+	(void)pci_drv;
+	assert(pci_drv == &mlx4_driver.pci_drv);
 	/* Get mlx4_dev[] index. */
-	idx = mlx4_dev_idx(&dev->pci_dev->addr);
+	idx = mlx4_dev_idx(&pci_dev->addr);
 	if (idx == -1) {
 		DEBUG("this driver cannot support any more adapters");
 		return -ENOMEM;
 	}
 	DEBUG("using driver device index %d", idx);
-#ifdef RTE_PCI_DRV_MULTIPLE
-	/* Determine the physical port number to bind this driver to. */
-	if (drv->pci_drv.drv_flags & RTE_PCI_DRV_MULTIPLE) {
-		while (test & mlx4_dev[idx].ports) {
-			test <<= 1;
-			++port;
-		}
-		/* Abort now if all all possible ports are already bound. */
-		if (test == 0)
-			return -ENODEV;
-	}
-#else /* RTE_PCI_DRV_MULTIPLE */
-	(void)drv;
-	/* RTE_PCI_DRV_MULTIPLE not supported, only check the first port. */
-	if (mlx4_dev[idx].ports & test)
-		return -ENODEV;
-#endif /* RTE_PCI_DRV_MULTIPLE */
+
 	/* Save PCI address. */
-	mlx4_dev[idx].pci_addr = dev->pci_dev->addr;
+	mlx4_dev[idx].pci_addr = pci_dev->addr;
 	list = ibv_get_device_list(&i);
 	if (list == NULL) {
 		assert(errno);
@@ -3459,32 +3442,39 @@ mlx4_dev_init(struct eth_driver *drv, struct rte_eth_dev *dev)
 		DEBUG("checking device \"%s\"", list[i]->name);
 		if (mlx4_ibv_device_to_pci_addr(list[i], &pci_addr))
 			continue;
-		if ((dev->pci_dev->addr.domain != pci_addr.domain) ||
-		    (dev->pci_dev->addr.bus != pci_addr.bus) ||
-		    (dev->pci_dev->addr.devid != pci_addr.devid) ||
-		    (dev->pci_dev->addr.function != pci_addr.function))
+		if ((pci_dev->addr.domain != pci_addr.domain) ||
+		    (pci_dev->addr.bus != pci_addr.bus) ||
+		    (pci_dev->addr.devid != pci_addr.devid) ||
+		    (pci_dev->addr.function != pci_addr.function))
 			continue;
 		DEBUG("PCI information matches, using device \"%s\"",
 		      list[i]->name);
-		ctx = ibv_open_device(list[i]);
+		attr_ctx = ibv_open_device(list[i]);
 		err = errno;
 		break;
 	}
-	ibv_free_device_list(list);
-	if (ctx == NULL) {
+	if (attr_ctx == NULL) {
+		ibv_free_device_list(list);
 		if (err == 0)
 			err = ENODEV;
 		errno = err;
 		return -err;
 	}
+	ibv_dev = list[i];
+
 	DEBUG("device opened");
-	if (ibv_query_device(ctx, &device_attr))
+	if (ibv_query_device(attr_ctx, &device_attr))
 		goto error;
 	DEBUG("%u port(s) detected", device_attr.phys_port_cnt);
 
-	{
+	for (i = 0; i < device_attr.phys_port_cnt; i++) {
+		uint32_t port = i + 1; /* ports are indexed from one */
+		uint32_t test = (1 << i);
+		struct ibv_context *ctx = NULL;
 		struct ibv_port_attr port_attr;
-		struct priv *priv = dev->data->dev_private;
+		struct ibv_pd *pd = NULL;
+		struct priv *priv = NULL;
+		struct rte_eth_dev *eth_dev;
 		struct ifreq ifr;
 #if RSS_SUPPORT
 		struct ibv_exp_device_attr exp_device_attr = {
@@ -3494,16 +3484,16 @@ mlx4_dev_init(struct eth_driver *drv, struct rte_eth_dev *dev)
 #endif /* RSS_SUPPORT */
 		union ibv_gid temp_gid;
 
-		if ((port - 1) >= device_attr.phys_port_cnt) {
-			DEBUG("port %u not available, skipping interface", port);
-			errno = ENODEV;
-			goto error;
-		}
 		DEBUG("using port %u (%08" PRIx32 ")", port, test);
+
+		ctx = ibv_open_device(ibv_dev);
+		if (ctx == NULL)
+			goto port_error;
+
 		/* Check port status. */
 		if ((errno = ibv_query_port(ctx, port, &port_attr))) {
 			DEBUG("port query failed: %s", strerror(errno));
-			goto error;
+			goto port_error;
 		}
 		if (port_attr.state != IBV_PORT_ACTIVE)
 			DEBUG("bad state for port %d: \"%s\" (%d)",
@@ -3515,11 +3505,21 @@ mlx4_dev_init(struct eth_driver *drv, struct rte_eth_dev *dev)
 		if (pd == NULL) {
 			DEBUG("PD allocation failure");
 			errno = ENOMEM;
-			goto error;
+			goto port_error;
 		}
+
 		mlx4_dev[idx].ports |= test;
-		memset(priv, 0, sizeof(*priv));
-		priv->dev = dev;
+
+		/* from rte_ethdev.c */
+		priv = rte_zmalloc("ethdev private structure",
+		                   sizeof(*priv),
+		                   CACHE_LINE_SIZE);
+		if (priv == NULL) {
+			DEBUG("priv allocation failure");
+			errno = ENOMEM;
+			goto port_error;
+		}
+
 		priv->ctx = ctx;
 		priv->device_attr = device_attr;
 		priv->port_attr = port_attr;
@@ -3529,7 +3529,7 @@ mlx4_dev_init(struct eth_driver *drv, struct rte_eth_dev *dev)
 #if RSS_SUPPORT
 		if (ibv_exp_query_device(ctx, &exp_device_attr)) {
 			DEBUG("experimental ibv_exp_query_device");
-			goto error;
+			goto port_error;
 		}
 		if ((exp_device_attr.device_cap_flags2 & IBV_EXP_DEVICE_QPG) &&
 		    (exp_device_attr.device_cap_flags2 & IBV_EXP_DEVICE_UD_RSS) &&
@@ -3562,7 +3562,7 @@ mlx4_dev_init(struct eth_driver *drv, struct rte_eth_dev *dev)
 			priv->no_sriov = 1;
 		if (ibv_query_gid(ctx, port, 0, &temp_gid)) {
 			DEBUG("ibv_query_gid() failure");
-			goto error;
+			goto port_error;
 		}
 		/* Configure the first MAC address by default. */
 		mac_from_gid(&priv->mac[0].addr_bytes, port, temp_gid.raw);
@@ -3579,8 +3579,6 @@ mlx4_dev_init(struct eth_driver *drv, struct rte_eth_dev *dev)
 		claim_zero(priv_mac_addr_add(priv, 1,
 					     &(const uint8_t [ETHER_ADDR_LEN])
 					     { "\xff\xff\xff\xff\xff\xff" }));
-		dev->dev_ops = &mlx4_dev_ops;
-		dev->data->mac_addrs = priv->mac;
 #ifndef NDEBUG
 		{
 			char ifname[IF_NAMESIZE];
@@ -3595,15 +3593,56 @@ mlx4_dev_init(struct eth_driver *drv, struct rte_eth_dev *dev)
 		if (priv_ifreq(priv, SIOCGIFMTU, &ifr) == 0)
 			priv->mtu = ifr.ifr_mtu;
 		DEBUG("port %u MTU is %u", priv->port, priv->mtu);
+
+		/* from rte_ethdev.c */
+		eth_dev = rte_eth_dev_allocate();
+		if (eth_dev == NULL) {
+			DEBUG("can not allocate rte ethdev");
+			errno = ENOMEM;
+			goto port_error;
+		}
+
+		eth_dev->data->dev_private = priv;
+		eth_dev->pci_dev = pci_dev;
+		eth_dev->driver = &mlx4_driver;
+		eth_dev->data->rx_mbuf_alloc_failed = 0;
+		eth_dev->data->max_frame_size = ETHER_MAX_LEN;
+
+		priv->dev = eth_dev;
+		eth_dev->dev_ops = &mlx4_dev_ops;
+		eth_dev->data->mac_addrs = priv->mac;
+
+		continue;
+
+port_error:
+		if (priv)
+			rte_free(priv);
+		if (pd)
+			claim_zero(ibv_dealloc_pd(pd));
+		if (ctx)
+			claim_zero(ibv_close_device(ctx));
+		break;
 	}
 
-	return 0;
+	/*
+	 * XXX if something went wrong in the loop above, there is a resource
+	 * leak (ctx, pd, priv, dpdk ethdev) but we can do nothing about it as
+	 * long as the dpdk does not provide a way to deallocate a ethdev and a
+	 * way to enumerate the registered ethdevs to free the previous ones.
+	 */
+
+	/* no port found, complain */
+	if (!mlx4_dev[idx].ports) {
+		errno = ENODEV;
+		goto error;
+	}
+
 error:
 	err = errno;
-	if (pd)
-		claim_zero(ibv_dealloc_pd(pd));
-	if (ctx)
-		claim_zero(ibv_close_device(ctx));
+	if (attr_ctx)
+		claim_zero(ibv_close_device(attr_ctx));
+	if (list)
+		ibv_free_device_list(list);
 	errno = err;
 	return -err;
 }
@@ -3636,11 +3675,8 @@ static struct eth_driver mlx4_driver = {
 	.pci_drv = {
 		.name = "rte_mlx4_pmd",
 		.id_table = mlx4_pci_id_map,
-#ifdef RTE_PCI_DRV_MULTIPLE
-		.drv_flags = RTE_PCI_DRV_MULTIPLE
-#endif /* RTE_PCI_DRV_MULTIPLE */
+		.devinit = mlx4_pci_devinit,
 	},
-	.eth_dev_init = mlx4_dev_init,
 	.dev_private_size = sizeof(struct priv)
 };
 
@@ -3648,5 +3684,5 @@ static struct eth_driver mlx4_driver = {
 static void __attribute__((constructor))
 mlx4_pmd_init(void)
 {
-	rte_eth_driver_register(&mlx4_driver);
+	rte_eal_pci_register(&mlx4_driver.pci_drv);
 }
