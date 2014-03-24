@@ -3405,7 +3405,6 @@ static struct eth_driver mlx4_driver;
 static int
 mlx4_dev_init(struct eth_driver *drv, struct rte_eth_dev *dev)
 {
-	struct priv *priv = dev->data->dev_private;
 	struct ibv_device **list;
 	int err = errno;
 	uint32_t port = 1; /* ports are indexed from one */
@@ -3413,15 +3412,6 @@ mlx4_dev_init(struct eth_driver *drv, struct rte_eth_dev *dev)
 	struct ibv_context *ctx = NULL;
 	struct ibv_pd *pd = NULL;
 	struct ibv_device_attr device_attr;
-	struct ibv_port_attr port_attr;
-	struct ifreq ifr;
-#if RSS_SUPPORT
-	struct ibv_exp_device_attr exp_device_attr = {
-		.comp_mask = (IBV_EXP_DEVICE_ATTR_FLAGS2 |
-			      IBV_EXP_DEVICE_ATTR_RSS_TBL_SZ)
-	};
-#endif /* RSS_SUPPORT */
-	union ibv_gid temp_gid;
 	int idx;
 	int i;
 
@@ -3491,107 +3481,122 @@ mlx4_dev_init(struct eth_driver *drv, struct rte_eth_dev *dev)
 	if (ibv_query_device(ctx, &device_attr))
 		goto error;
 	DEBUG("%u port(s) detected", device_attr.phys_port_cnt);
-	if ((port - 1) >= device_attr.phys_port_cnt) {
-		DEBUG("port %u not available, skipping interface", port);
-		errno = ENODEV;
-		goto error;
-	}
-	DEBUG("using port %u (%08" PRIx32 ")", port, test);
-	/* Check port status. */
-	if ((errno = ibv_query_port(ctx, port, &port_attr))) {
-		DEBUG("port query failed: %s", strerror(errno));
-		goto error;
-	}
-	if (port_attr.state != IBV_PORT_ACTIVE)
-		DEBUG("bad state for port %d: \"%s\" (%d)",
-		      port, ibv_port_state_str(port_attr.state),
-		      port_attr.state);
 
-	/* Allocate protection domain. */
-	pd = ibv_alloc_pd(ctx);
-	if (pd == NULL) {
-		DEBUG("PD allocation failure");
-		errno = ENOMEM;
-		goto error;
-	}
-	mlx4_dev[idx].ports |= test;
-	memset(priv, 0, sizeof(*priv));
-	priv->dev = dev;
-	priv->ctx = ctx;
-	priv->device_attr = device_attr;
-	priv->port_attr = port_attr;
-	priv->port = port;
-	priv->pd = pd;
-	priv->mtu = ETHER_MTU;
+	{
+		struct ibv_port_attr port_attr;
+		struct priv *priv = dev->data->dev_private;
+		struct ifreq ifr;
 #if RSS_SUPPORT
-	if (ibv_exp_query_device(ctx, &exp_device_attr)) {
-		DEBUG("experimental ibv_exp_query_device");
-		goto error;
-	}
-	if ((exp_device_attr.device_cap_flags2 & IBV_EXP_DEVICE_QPG) &&
-	    (exp_device_attr.device_cap_flags2 & IBV_EXP_DEVICE_UD_RSS) &&
-	    (exp_device_attr.comp_mask & IBV_EXP_DEVICE_ATTR_RSS_TBL_SZ) &&
-	    (exp_device_attr.max_rss_tbl_sz > 0)) {
-		priv->hw_qpg = 1;
-		priv->hw_rss = 1;
-		priv->max_rss_tbl_sz = exp_device_attr.max_rss_tbl_sz;
-	}
-	else {
-		priv->hw_qpg = 0;
-		priv->hw_rss = 0;
-		priv->max_rss_tbl_sz = 0;
-	}
-	priv->hw_tss = !!(exp_device_attr.device_cap_flags2 &
-			  IBV_EXP_DEVICE_UD_TSS);
-	DEBUG("device flags: %s%s%s",
-	      (priv->hw_qpg ? "IBV_DEVICE_QPG " : ""),
-	      (priv->hw_tss ? "IBV_DEVICE_TSS " : ""),
-	      (priv->hw_rss ? "IBV_DEVICE_RSS " : ""));
-	if (priv->hw_rss)
-		DEBUG("maximum RSS indirection table size: %u",
-		      exp_device_attr.max_rss_tbl_sz);
+		struct ibv_exp_device_attr exp_device_attr = {
+			.comp_mask = (IBV_EXP_DEVICE_ATTR_FLAGS2 |
+				      IBV_EXP_DEVICE_ATTR_RSS_TBL_SZ)
+		};
+#endif /* RSS_SUPPORT */
+		union ibv_gid temp_gid;
+
+		if ((port - 1) >= device_attr.phys_port_cnt) {
+			DEBUG("port %u not available, skipping interface", port);
+			errno = ENODEV;
+			goto error;
+		}
+		DEBUG("using port %u (%08" PRIx32 ")", port, test);
+		/* Check port status. */
+		if ((errno = ibv_query_port(ctx, port, &port_attr))) {
+			DEBUG("port query failed: %s", strerror(errno));
+			goto error;
+		}
+		if (port_attr.state != IBV_PORT_ACTIVE)
+			DEBUG("bad state for port %d: \"%s\" (%d)",
+			      port, ibv_port_state_str(port_attr.state),
+			      port_attr.state);
+
+		/* Allocate protection domain. */
+		pd = ibv_alloc_pd(ctx);
+		if (pd == NULL) {
+			DEBUG("PD allocation failure");
+			errno = ENOMEM;
+			goto error;
+		}
+		mlx4_dev[idx].ports |= test;
+		memset(priv, 0, sizeof(*priv));
+		priv->dev = dev;
+		priv->ctx = ctx;
+		priv->device_attr = device_attr;
+		priv->port_attr = port_attr;
+		priv->port = port;
+		priv->pd = pd;
+		priv->mtu = ETHER_MTU;
+#if RSS_SUPPORT
+		if (ibv_exp_query_device(ctx, &exp_device_attr)) {
+			DEBUG("experimental ibv_exp_query_device");
+			goto error;
+		}
+		if ((exp_device_attr.device_cap_flags2 & IBV_EXP_DEVICE_QPG) &&
+		    (exp_device_attr.device_cap_flags2 & IBV_EXP_DEVICE_UD_RSS) &&
+		    (exp_device_attr.comp_mask & IBV_EXP_DEVICE_ATTR_RSS_TBL_SZ) &&
+		    (exp_device_attr.max_rss_tbl_sz > 0)) {
+			priv->hw_qpg = 1;
+			priv->hw_rss = 1;
+			priv->max_rss_tbl_sz = exp_device_attr.max_rss_tbl_sz;
+		}
+		else {
+			priv->hw_qpg = 0;
+			priv->hw_rss = 0;
+			priv->max_rss_tbl_sz = 0;
+		}
+		priv->hw_tss = !!(exp_device_attr.device_cap_flags2 &
+				  IBV_EXP_DEVICE_UD_TSS);
+		DEBUG("device flags: %s%s%s",
+		      (priv->hw_qpg ? "IBV_DEVICE_QPG " : ""),
+		      (priv->hw_tss ? "IBV_DEVICE_TSS " : ""),
+		      (priv->hw_rss ? "IBV_DEVICE_RSS " : ""));
+		if (priv->hw_rss)
+			DEBUG("maximum RSS indirection table size: %u",
+			      exp_device_attr.max_rss_tbl_sz);
 #endif /* RSS_SUPPORT */
 #ifdef MLX4_COMPAT_VMWARE
-	if (mlx4_getenv_int("MLX4_COMPAT_VMWARE"))
-		priv->vmware = 1;
+		if (mlx4_getenv_int("MLX4_COMPAT_VMWARE"))
+			priv->vmware = 1;
 #endif /* MLX4_COMPAT_VMWARE */
-	if (mlx4_getenv_int("MLX4_NO_SRIOV"))
-		priv->no_sriov = 1;
-	if (ibv_query_gid(ctx, port, 0, &temp_gid)) {
-		DEBUG("ibv_query_gid() failure");
-		goto error;
-	}
-	/* Configure the first MAC address by default. */
-	mac_from_gid(&priv->mac[0].addr_bytes, port, temp_gid.raw);
-	BITFIELD_SET(priv->mac_configured, 0);
-	DEBUG("port %u MAC address is %02x:%02x:%02x:%02x:%02x:%02x",
-	      priv->port,
-	      priv->mac[0].addr_bytes[0], priv->mac[0].addr_bytes[1],
-	      priv->mac[0].addr_bytes[2], priv->mac[0].addr_bytes[3],
-	      priv->mac[0].addr_bytes[4], priv->mac[0].addr_bytes[5]);
-	/* Register MAC and broadcast addresses. */
-	claim_zero(priv_mac_addr_add(priv, 0,
-				     (const uint8_t (*)[ETHER_ADDR_LEN])
-				     priv->mac[0].addr_bytes));
-	claim_zero(priv_mac_addr_add(priv, 1,
-				     &(const uint8_t [ETHER_ADDR_LEN])
-				     { "\xff\xff\xff\xff\xff\xff" }));
-	dev->dev_ops = &mlx4_dev_ops;
-	dev->data->mac_addrs = priv->mac;
+		if (mlx4_getenv_int("MLX4_NO_SRIOV"))
+			priv->no_sriov = 1;
+		if (ibv_query_gid(ctx, port, 0, &temp_gid)) {
+			DEBUG("ibv_query_gid() failure");
+			goto error;
+		}
+		/* Configure the first MAC address by default. */
+		mac_from_gid(&priv->mac[0].addr_bytes, port, temp_gid.raw);
+		BITFIELD_SET(priv->mac_configured, 0);
+		DEBUG("port %u MAC address is %02x:%02x:%02x:%02x:%02x:%02x",
+		      priv->port,
+		      priv->mac[0].addr_bytes[0], priv->mac[0].addr_bytes[1],
+		      priv->mac[0].addr_bytes[2], priv->mac[0].addr_bytes[3],
+		      priv->mac[0].addr_bytes[4], priv->mac[0].addr_bytes[5]);
+		/* Register MAC and broadcast addresses. */
+		claim_zero(priv_mac_addr_add(priv, 0,
+					     (const uint8_t (*)[ETHER_ADDR_LEN])
+					     priv->mac[0].addr_bytes));
+		claim_zero(priv_mac_addr_add(priv, 1,
+					     &(const uint8_t [ETHER_ADDR_LEN])
+					     { "\xff\xff\xff\xff\xff\xff" }));
+		dev->dev_ops = &mlx4_dev_ops;
+		dev->data->mac_addrs = priv->mac;
 #ifndef NDEBUG
-	{
-		char ifname[IF_NAMESIZE];
+		{
+			char ifname[IF_NAMESIZE];
 
-		if (priv_get_ifname(priv, &ifname) == 0)
-			DEBUG("port %u ifname is \"%s\"", priv->port, ifname);
-		else
-			DEBUG("port %u ifname is unknown", priv->port);
-	}
+			if (priv_get_ifname(priv, &ifname) == 0)
+				DEBUG("port %u ifname is \"%s\"", priv->port, ifname);
+			else
+				DEBUG("port %u ifname is unknown", priv->port);
+		}
 #endif
-	/* Get actual MTU if possible. */
-	if (priv_ifreq(priv, SIOCGIFMTU, &ifr) == 0)
-		priv->mtu = ifr.ifr_mtu;
-	DEBUG("port %u MTU is %u", priv->port, priv->mtu);
+		/* Get actual MTU if possible. */
+		if (priv_ifreq(priv, SIOCGIFMTU, &ifr) == 0)
+			priv->mtu = ifr.ifr_mtu;
+		DEBUG("port %u MTU is %u", priv->port, priv->mtu);
+	}
+
 	return 0;
 error:
 	err = errno;
