@@ -3403,7 +3403,7 @@ mlx4_getenv_int(const char *name)
 static struct eth_driver mlx4_driver;
 
 static int
-mlx4_generic_init(struct eth_driver *drv, struct rte_eth_dev *dev, int probe)
+mlx4_dev_init(struct eth_driver *drv, struct rte_eth_dev *dev)
 {
 	struct priv *priv = dev->data->dev_private;
 	struct ibv_device **list;
@@ -3506,14 +3506,13 @@ mlx4_generic_init(struct eth_driver *drv, struct rte_eth_dev *dev, int probe)
 		DEBUG("bad state for port %d: \"%s\" (%d)",
 		      port, ibv_port_state_str(port_attr.state),
 		      port_attr.state);
-	if (!probe) {
-		/* Allocate protection domain. */
-		pd = ibv_alloc_pd(ctx);
-		if (pd == NULL) {
-			DEBUG("PD allocation failure");
-			errno = ENOMEM;
-			goto error;
-		}
+
+	/* Allocate protection domain. */
+	pd = ibv_alloc_pd(ctx);
+	if (pd == NULL) {
+		DEBUG("PD allocation failure");
+		errno = ENOMEM;
+		goto error;
 	}
 	mlx4_dev[idx].ports |= test;
 	memset(priv, 0, sizeof(*priv));
@@ -3593,10 +3592,6 @@ mlx4_generic_init(struct eth_driver *drv, struct rte_eth_dev *dev, int probe)
 	if (priv_ifreq(priv, SIOCGIFMTU, &ifr) == 0)
 		priv->mtu = ifr.ifr_mtu;
 	DEBUG("port %u MTU is %u", priv->port, priv->mtu);
-	if (probe) {
-		priv->ctx = NULL;
-		ibv_close_device(ctx);
-	}
 	return 0;
 error:
 	err = errno;
@@ -3607,20 +3602,6 @@ error:
 	errno = err;
 	return -err;
 }
-
-static int
-mlx4_dev_init(struct eth_driver *drv, struct rte_eth_dev *dev)
-{
-	return mlx4_generic_init(drv, dev, 0);
-}
-
-#ifdef DPDK_6WIND
-static int
-mlx4_dev_probe(struct eth_driver *drv, struct rte_eth_dev *dev)
-{
-	return mlx4_generic_init(drv, dev, 1);
-}
-#endif
 
 static struct rte_pci_id mlx4_pci_id_map[] = {
 	{
@@ -3655,9 +3636,6 @@ static struct eth_driver mlx4_driver = {
 #endif /* RTE_PCI_DRV_MULTIPLE */
 	},
 	.eth_dev_init = mlx4_dev_init,
-#ifdef DPDK_6WIND
-	.eth_dev_probe = mlx4_dev_probe,
-#endif
 	.dev_private_size = sizeof(struct priv)
 };
 
