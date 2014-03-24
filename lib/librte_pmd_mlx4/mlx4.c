@@ -3482,6 +3482,7 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 				      IBV_EXP_DEVICE_ATTR_RSS_TBL_SZ)
 		};
 #endif /* RSS_SUPPORT */
+		struct ether_addr mac;
 		union ibv_gid temp_gid;
 
 		DEBUG("using port %u (%08" PRIx32 ")", port, test);
@@ -3565,17 +3566,16 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 			goto port_error;
 		}
 		/* Configure the first MAC address by default. */
-		mac_from_gid(&priv->mac[0].addr_bytes, port, temp_gid.raw);
-		BITFIELD_SET(priv->mac_configured, 0);
+		mac_from_gid(&mac.addr_bytes, port, temp_gid.raw);
 		DEBUG("port %u MAC address is %02x:%02x:%02x:%02x:%02x:%02x",
 		      priv->port,
-		      priv->mac[0].addr_bytes[0], priv->mac[0].addr_bytes[1],
-		      priv->mac[0].addr_bytes[2], priv->mac[0].addr_bytes[3],
-		      priv->mac[0].addr_bytes[4], priv->mac[0].addr_bytes[5]);
+		      mac.addr_bytes[0], mac.addr_bytes[1],
+		      mac.addr_bytes[2], mac.addr_bytes[3],
+		      mac.addr_bytes[4], mac.addr_bytes[5]);
 		/* Register MAC and broadcast addresses. */
 		claim_zero(priv_mac_addr_add(priv, 0,
 					     (const uint8_t (*)[ETHER_ADDR_LEN])
-					     priv->mac[0].addr_bytes));
+					     mac.addr_bytes));
 		claim_zero(priv_mac_addr_add(priv, 1,
 					     &(const uint8_t [ETHER_ADDR_LEN])
 					     { "\xff\xff\xff\xff\xff\xff" }));
