@@ -3639,23 +3639,9 @@ static struct eth_driver mlx4_driver = {
 	.dev_private_size = sizeof(struct priv)
 };
 
-#ifdef RTE_LIBRTE_MLX4_PMD
-
-/* Exported initializer. */
-int
-rte_mlx4_pmd_init(void)
-{
-	rte_eth_driver_register(&mlx4_driver);
-	return 0;
-}
-
-#else /* RTE_LIBRTE_MLX4_PMD */
-
 /* Shared object initializer. */
 static void __attribute__((constructor))
 mlx4_pmd_init(void)
 {
 	rte_eth_driver_register(&mlx4_driver);
 }
-
-#endif /* RTE_LIBRTE_MLX4_PMD */
