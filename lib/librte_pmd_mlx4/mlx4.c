@@ -239,6 +239,7 @@ struct priv {
 #ifdef MLX4_COMPAT_VMWARE
 	unsigned int vmware:1; /* Use VMware compatibility. */
 #endif
+	unsigned int vf:1; /* This is a VF device. */
 	unsigned int max_rss_tbl_sz; /* Maximum number of RSS queues. */
 	/* RX/TX queues. */
 	struct rxq rxq_parent; /* Parent queue when RSS is enabled. */
@@ -846,7 +847,8 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			/* Update SGE. */
 			elt_buf->bufs[seg_n] = buf;
 			sge->addr = (uintptr_t)buf->pkt.data;
-			rte_prefetch0((volatile void *)sge->addr);
+			if (txq->priv->vf)
+				rte_prefetch0((volatile void *)sge->addr);
 			sge->length = buf->pkt.data_len;
 			sge->lkey = lkey;
 			sent_size += sge->length;
@@ -3408,6 +3410,7 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 	int err = errno;
 	struct ibv_context *attr_ctx = NULL;
 	struct ibv_device_attr device_attr;
+	unsigned int vf;
 	int idx;
 	int i;
 
@@ -3445,8 +3448,10 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		    (pci_dev->addr.devid != pci_addr.devid) ||
 		    (pci_dev->addr.function != pci_addr.function))
 			continue;
-		DEBUG("PCI information matches, using device \"%s\"",
-		      list[i]->name);
+		vf = (pci_dev->id.device_id ==
+		      PCI_DEVICE_ID_MELLANOX_CONNECTX3VF);
+		DEBUG("PCI information matches, using device \"%s\" (VF: %s)",
+		      list[i]->name, (vf ? "true" : "false"));
 		attr_ctx = ibv_open_device(list[i]);
 		err = errno;
 		break;
@@ -3559,6 +3564,7 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 #else /* MLX4_COMPAT_VMWARE */
 		(void)mlx4_getenv_int;
 #endif /* MLX4_COMPAT_VMWARE */
+		priv->vf = vf;
 		if (ibv_query_gid(ctx, port, 0, &temp_gid)) {
 			DEBUG("ibv_query_gid() failure");
 			goto port_error;
