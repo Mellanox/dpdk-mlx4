@@ -3068,7 +3068,7 @@ mlx4_dev_control(struct rte_eth_dev *dev, uint32_t command, void *arg)
 		break;
 	case RTE_DEV_CMD_ETHTOOL_GET_DRVINFO:
 		snprintf(data->info.driver, sizeof(data->info.driver),
-			 "mlx4_pmd");
+			 MLX4_DRIVER_NAME);
 		snprintf(data->info.bus_info, sizeof(data->info.bus_info),
 			 PCI_PRI_FMT,
 			 (unsigned int)dev->pci_dev->addr.domain,
@@ -3673,7 +3673,7 @@ static struct rte_pci_id mlx4_pci_id_map[] = {
 
 static struct eth_driver mlx4_driver = {
 	.pci_drv = {
-		.name = "rte_mlx4_pmd",
+		.name = MLX4_DRIVER_NAME,
 		.id_table = mlx4_pci_id_map,
 		.devinit = mlx4_pci_devinit,
 	},

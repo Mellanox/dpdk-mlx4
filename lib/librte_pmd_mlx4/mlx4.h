@@ -59,6 +59,8 @@
 #define PCI_DEVICE_ID_MELLANOX_CONNECTX3PRO 0x1007
 #define PCI_DEVICE_ID_MELLANOX_CONNECTX3VF 0x1004
 
+#define MLX4_DRIVER_NAME "librte_pmd_mlx4"
+
 /* Bit-field manipulation. */
 #define BITFIELD_DECLARE(bf, type, size)				\
 	type bf[(((size_t)(size) / (sizeof(type) * CHAR_BIT)) +		\
