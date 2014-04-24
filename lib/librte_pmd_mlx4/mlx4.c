@@ -2969,9 +2969,7 @@ mlx4_dev_control(struct rte_eth_dev *dev, uint32_t command, void *arg)
 	struct priv *priv = dev->data->dev_private;
 	union {
 		uint16_t u16;
-		struct rte_dev_ethtool_drvinfo info;
-		struct rte_dev_ethtool_gsettings gset;
-		struct rte_dev_ethtool_pauseparam pause;
+		struct rte_dev_pauseparam pause;
 	} *data = arg;
 	int ret;
 	unsigned int i;
@@ -3066,34 +3064,7 @@ mlx4_dev_control(struct rte_eth_dev *dev, uint32_t command, void *arg)
 		priv->mtu = data->u16;
 		ret = 0;
 		break;
-	case RTE_DEV_CMD_ETHTOOL_GET_DRVINFO:
-		snprintf(data->info.driver, sizeof(data->info.driver),
-			 MLX4_DRIVER_NAME);
-		snprintf(data->info.bus_info, sizeof(data->info.bus_info),
-			 PCI_PRI_FMT,
-			 (unsigned int)dev->pci_dev->addr.domain,
-			 (unsigned int)dev->pci_dev->addr.bus,
-			 (unsigned int)dev->pci_dev->addr.devid,
-			 (unsigned int)dev->pci_dev->addr.function);
-		ret = 0;
-		break;
-	case RTE_DEV_CMD_ETHTOOL_GET_SETTINGS:
-		mlx4_link_update_unlocked(dev, 0);
-		/* phy_addr not available. */
-		data->gset.phy_addr = 0;
-		data->gset.phy_addr = ~data->gset.phy_addr;
-		/* Approximate values. */
-		data->gset.supported = RTE_SUPPORTED_Autoneg;
-		data->gset.autoneg_advertised = RTE_ADVERTISED_Autoneg;
-		data->gset.port = RTE_PORT_OTHER;
-		data->gset.transceiver = RTE_XCVR_EXTERNAL;
-		data->gset.speed = dev->data->dev_link.link_speed;
-		data->gset.duplex = dev->data->dev_link.link_duplex;
-		data->gset.status = dev->data->dev_link.link_status;
-		data->gset.autoneg = RTE_AUTONEG_ENABLE;
-		ret = 0;
-		break;
-	case RTE_DEV_CMD_ETHTOOL_GET_PAUSEPARAM:
+	case RTE_DEV_CMD_GET_PAUSEPARAM:
 		ifr.ifr_data = &ethtool.pause;
 		ethtool.pause.cmd = ETHTOOL_GPAUSEPARAM;
 		if (priv_ifreq(priv, SIOCETHTOOL, &ifr)) {
@@ -3103,14 +3074,14 @@ mlx4_dev_control(struct rte_eth_dev *dev, uint32_t command, void *arg)
 			      strerror(errno));
 			break;
 		}
-		data->pause = (struct rte_dev_ethtool_pauseparam){
+		data->pause = (struct rte_dev_pauseparam){
 			.autoneg = ethtool.pause.autoneg,
 			.rx_pause = ethtool.pause.rx_pause,
 			.tx_pause = ethtool.pause.tx_pause
 		};
 		ret = 0;
 		break;
-	case RTE_DEV_CMD_ETHTOOL_SET_PAUSEPARAM:
+	case RTE_DEV_CMD_SET_PAUSEPARAM:
 		ifr.ifr_data = &ethtool.pause;
 		ethtool.pause = (struct ethtool_pauseparam){
 			.cmd = ETHTOOL_SPAUSEPARAM,
@@ -3127,9 +3098,6 @@ mlx4_dev_control(struct rte_eth_dev *dev, uint32_t command, void *arg)
 		}
 		ret = 0;
 		break;
-	case RTE_DEV_CMD_ETHTOOL_GET_SSET_COUNT:
-	case RTE_DEV_CMD_ETHTOOL_GET_STRINGS:
-	case RTE_DEV_CMD_ETHTOOL_GET_STATS:
 	default:
 		ret = ENOTSUP;
 		break;
