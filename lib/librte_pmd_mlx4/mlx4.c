@@ -693,7 +693,7 @@ txq_complete(struct txq *txq)
 				(*bufs)[j] = NULL;
 #ifndef NDEBUG
 				/* Make sure this segment is unlinked. */
-				buf->pkt.next = NULL;
+				buf->next = NULL;
 				/* SGE poisoning shouldn't hurt. */
 				memset(&elt_wr->sges[j], 0x44,
 				       sizeof(elt_wr->sges[j]));
@@ -829,7 +829,7 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		/* Register each segment as SGEs. */
 		for (buf = pkts[i];
 		     ((buf != NULL) && (seg_n != elemof(elt_wr->sges)));
-		     buf = buf->pkt.next) {
+		     buf = buf->next) {
 			struct ibv_sge *sge = &elt_wr->sges[seg_n];
 			uint32_t lkey;
 
@@ -841,15 +841,15 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 				break;
 			}
 			/* Ignore empty segments (except the first one). */
-			if (unlikely((buf->pkt.data_len == 0) &&
+			if (unlikely((buf->data_len == 0) &&
 				     (buf != pkts[i])))
 				continue;
 			/* Update SGE. */
 			elt_buf->bufs[seg_n] = buf;
-			sge->addr = (uintptr_t)buf->pkt.data;
+			sge->addr = (uintptr_t)rte_pktmbuf_mtod(buf, char *);
 			if (txq->priv->vf)
 				rte_prefetch0((volatile void *)sge->addr);
-			sge->length = buf->pkt.data_len;
+			sge->length = buf->data_len;
 			sge->lkey = lkey;
 			sent_size += sge->length;
 			/* sent_size may be unused, silence warning. */
@@ -942,7 +942,7 @@ mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		while (1) {
 			--txq->stats.opackets;
 			assert(bad_elt_buf->bufs[0] != NULL);
-			txq->stats.obytes -= bad_elt_buf->bufs[0]->pkt.pkt_len;
+			txq->stats.obytes -= bad_elt_buf->bufs[0]->pkt_len;
 			if (bad_elt_wr->wr.next == NULL)
 				break;
 			bad_elt_wr = containerof(bad_elt_wr->wr.next,
@@ -1197,9 +1197,7 @@ rxq_alloc_elts_sp(struct rxq *rxq, unsigned int elts_n)
 			}
 			elt->bufs[j] = buf;
 			/* Headroom is reserved by rte_pktmbuf_alloc(). */
-			assert(((uintptr_t)buf->buf_addr +
-				RTE_PKTMBUF_HEADROOM) ==
-			       (uintptr_t)buf->pkt.data);
+			assert(buf->data_off == RTE_PKTMBUF_HEADROOM);
 			/* Buffer is supposed to be empty. */
 			assert(rte_pktmbuf_data_len(buf) == 0);
 			assert(rte_pktmbuf_pkt_len(buf) == 0);
@@ -1207,17 +1205,16 @@ rxq_alloc_elts_sp(struct rxq *rxq, unsigned int elts_n)
 			assert(sizeof(sge->addr) >= sizeof(uintptr_t));
 			if (j == 0) {
 				/* The first SGE keeps its headroom. */
-				sge->addr = (uintptr_t)buf->pkt.data;
+				sge->addr = (uintptr_t)rte_pktmbuf_mtod(buf,
+									char *);
 				sge->length = (buf->buf_len -
 					       RTE_PKTMBUF_HEADROOM);
 			}
 			else {
 				/* Subsequent SGEs lose theirs. */
-				assert(((uintptr_t)buf->pkt.data -
-					RTE_PKTMBUF_HEADROOM) ==
-				       (uintptr_t)buf->buf_addr);
-				buf->pkt.data = buf->buf_addr;
-				sge->addr = (uintptr_t)buf->pkt.data;
+				assert(buf->data_off == RTE_PKTMBUF_HEADROOM);
+				buf->data_off = 0;
+				sge->addr = (uintptr_t)buf->buf_addr;
 				sge->length = buf->buf_len;
 			}
 			sge->lkey = rxq->mr->lkey;
@@ -1311,16 +1308,14 @@ rxq_alloc_elts(struct rxq *rxq, unsigned int elts_n)
 		wr->sg_list = sge;
 		wr->num_sge = 1;
 		/* Headroom is reserved by rte_pktmbuf_alloc(). */
-		assert(((uintptr_t)buf->buf_addr +
-			RTE_PKTMBUF_HEADROOM) ==
-		       (uintptr_t)buf->pkt.data);
+		assert(buf->data_off == RTE_PKTMBUF_HEADROOM);
 		/* Buffer is supposed to be empty. */
 		assert(rte_pktmbuf_data_len(buf) == 0);
 		assert(rte_pktmbuf_pkt_len(buf) == 0);
 		/* sge->addr must be able to store a pointer. */
 		assert(sizeof(sge->addr) >= sizeof(uintptr_t));
 		/* SGE keeps its headroom. */
-		sge->addr = (uintptr_t)buf->pkt.data;
+		sge->addr = (uintptr_t)rte_pktmbuf_mtod(buf, char *);
 		sge->length = (buf->buf_len - RTE_PKTMBUF_HEADROOM);
 		sge->lkey = rxq->mr->lkey;
 		/* Redundant check for tailroom. */
@@ -1855,23 +1850,21 @@ mlx4_rx_burst_sp(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 #ifndef NDEBUG
 			else {
 				/* assert() checks below need this. */
-				rep->pkt.data_len = 0;
+				rep->data_len = 0;
 			}
 #endif
-			seg_headroom = ((uintptr_t)seg->pkt.data -
-					(uintptr_t)seg->buf_addr);
+			seg_headroom = seg->data_off;
 			seg_tailroom = (seg->buf_len - seg_headroom);
 			assert(seg_tailroom == rte_pktmbuf_tailroom(seg));
 			/* Only the first segment comes with headroom. */
 			assert((j == 0) ?
 			       (seg_headroom == RTE_PKTMBUF_HEADROOM) :
 			       (seg_headroom == 0));
-			rep->pkt.data = (void *)((uintptr_t)rep->buf_addr +
-						 seg_headroom);
+			rep->data_off = seg_headroom;
 			assert(rte_pktmbuf_headroom(rep) == seg_headroom);
 			assert(rte_pktmbuf_tailroom(rep) == seg_tailroom);
 			/* Reconfigure sge to use rep instead of seg. */
-			sge->addr = (uintptr_t)rep->pkt.data;
+			sge->addr = (uintptr_t)rte_pktmbuf_mtod(rep, char *);
 			assert(sge->length == seg_tailroom);
 			assert(sge->lkey == rxq->mr->lkey);
 			elt->bufs[j] = rep;
@@ -1879,26 +1872,26 @@ mlx4_rx_burst_sp(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			/* Update pkt_buf if it's the first segment, or link
 			 * seg to the previous one and update pkt_buf_next. */
 			*pkt_buf_next = seg;
-			pkt_buf_next = &seg->pkt.next;
+			pkt_buf_next = &seg->next;
 			/* Update seg information. */
-			seg->pkt.nb_segs = 1;
-			seg->pkt.in_port = rxq->port_id;
+			seg->nb_segs = 1;
+			seg->in_port = rxq->port_id;
 			if (likely(len <= seg_tailroom)) {
 				/* Last segment. */
-				seg->pkt.data_len = len;
-				seg->pkt.pkt_len = len;
+				seg->data_len = len;
+				seg->pkt_len = len;
 				break;
 			}
-			seg->pkt.data_len = seg_tailroom;
-			seg->pkt.pkt_len = seg_tailroom;
+			seg->data_len = seg_tailroom;
+			seg->pkt_len = seg_tailroom;
 			len -= seg_tailroom;
 		}
 		/* Update head and tail segments. */
 		*pkt_buf_next = NULL;
 		assert(pkt_buf != NULL);
 		assert(j != 0);
-		pkt_buf->pkt.nb_segs = j;
-		pkt_buf->pkt.pkt_len = wc->byte_len;
+		pkt_buf->nb_segs = j;
+		pkt_buf->pkt_len = wc->byte_len;
 		pkt_buf->ol_flags = 0;
 
 		/* Return packet. */
@@ -2015,12 +2008,12 @@ mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		wr->wr_id = (uint64_t)rep;
 
 		/* Update seg information. */
-		seg->pkt.data = (char *)seg->buf_addr + RTE_PKTMBUF_HEADROOM;
-		seg->pkt.nb_segs = 1;
-		seg->pkt.in_port = rxq->port_id;
-		seg->pkt.next = NULL;
-		seg->pkt.pkt_len = len;
-		seg->pkt.data_len = len;
+		seg->data_off = RTE_PKTMBUF_HEADROOM;
+		seg->nb_segs = 1;
+		seg->in_port = rxq->port_id;
+		seg->next = NULL;
+		seg->pkt_len = len;
+		seg->data_len = len;
 		seg->ol_flags = 0;
 
 		/* Return packet. */
