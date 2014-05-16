@@ -2764,8 +2764,6 @@ mlx4_link_update(struct rte_eth_dev *dev, int wait_to_complete)
 	return ret;
 }
 
-#ifdef DPDK_6WIND
-
 static int
 mlx4_dev_get_mtu(struct rte_eth_dev *dev, uint16_t *mtu)
 {
@@ -2873,7 +2871,7 @@ out:
 }
 
 static int
-mlx4_dev_get_flow_ctrl(struct rte_eth_dev *dev, struct rte_dev_pauseparam *pause)
+mlx4_dev_get_flow_ctrl(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 {
 	struct priv *priv = dev->data->dev_private;
 	struct ifreq ifr;
@@ -2890,11 +2888,16 @@ mlx4_dev_get_flow_ctrl(struct rte_eth_dev *dev, struct rte_dev_pauseparam *pause
 		      strerror(errno));
 		goto out;
 	}
-	*pause = (struct rte_dev_pauseparam){
-		.autoneg = ethpause.autoneg,
-		.rx_pause = ethpause.rx_pause,
-		.tx_pause = ethpause.tx_pause
-	};
+
+	fc_conf->autoneg = ethpause.autoneg;
+	if (ethpause.rx_pause && ethpause.tx_pause)
+		fc_conf->mode = RTE_FC_FULL;
+	else if (ethpause.rx_pause)
+		fc_conf->mode = RTE_FC_RX_PAUSE;
+	else if (ethpause.tx_pause)
+		fc_conf->mode = RTE_FC_TX_PAUSE;
+	else
+		fc_conf->mode = RTE_FC_NONE;
 	ret = 0;
 
 out:
@@ -2903,7 +2906,7 @@ out:
 }
 
 static int
-mlx4_dev_set_flow_ctrl(struct rte_eth_dev *dev, struct rte_dev_pauseparam *pause)
+mlx4_dev_set_flow_ctrl(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 {
 	struct priv *priv = dev->data->dev_private;
 	struct ifreq ifr;
@@ -2911,12 +2914,18 @@ mlx4_dev_set_flow_ctrl(struct rte_eth_dev *dev, struct rte_dev_pauseparam *pause
 	int ret;
 
 	ifr.ifr_data = &ethpause;
-	ethpause = (struct ethtool_pauseparam){
-		.cmd = ETHTOOL_SPAUSEPARAM,
-		.autoneg = pause->autoneg,
-		.rx_pause = pause->rx_pause,
-		.tx_pause = pause->tx_pause
-	};
+	ethpause.autoneg = fc_conf->autoneg;
+
+	if ((fc_conf->mode & RTE_FC_FULL) || (fc_conf->mode & RTE_FC_RX_PAUSE))
+		ethpause.rx_pause = 1;
+	else
+		ethpause.rx_pause = 0;
+
+	if ((fc_conf->mode & RTE_FC_FULL) || (fc_conf->mode & RTE_FC_TX_PAUSE))
+		ethpause.tx_pause = 1;
+	else
+		ethpause.tx_pause = 0;
+
 	priv_lock(priv);
 	if (priv_ifreq(priv, SIOCETHTOOL, &ifr)) {
 		ret = errno;
@@ -2931,37 +2940,6 @@ out:
 	priv_unlock(priv);
 	return ret;
 }
-
-static int
-mlx4_dev_control(struct rte_eth_dev *dev, uint32_t command, void *arg)
-{
-	union {
-		uint16_t u16;
-		struct rte_dev_pauseparam pause;
-	} *data = arg;
-	int ret;
-
-	switch (command) {
-	case RTE_DEV_CMD_GET_MTU:
-		ret = mlx4_dev_get_mtu(dev, &data->u16);
-		break;
-	case RTE_DEV_CMD_SET_MTU:
-		ret = mlx4_dev_set_mtu(dev, &data->u16);
-		break;
-	case RTE_DEV_CMD_GET_PAUSEPARAM:
-		ret = mlx4_dev_get_flow_ctrl(dev, &data->pause);
-		break;
-	case RTE_DEV_CMD_SET_PAUSEPARAM:
-		ret = mlx4_dev_set_flow_ctrl(dev, &data->pause);
-		break;
-	default:
-		ret = ENOTSUP;
-		break;
-	}
-	return -ret;
-}
-
-#endif /* DPDK_6WIND */
 
 static int
 vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
@@ -3077,13 +3055,13 @@ static struct eth_dev_ops mlx4_dev_ops = {
 	.tx_queue_release = mlx4_tx_queue_release,
 	.dev_led_on = NULL,
 	.dev_led_off = NULL,
-	.flow_ctrl_set = NULL,
+	.flow_ctrl_get = mlx4_dev_get_flow_ctrl,
+	.flow_ctrl_set = mlx4_dev_set_flow_ctrl,
 	.priority_flow_ctrl_set = NULL,
 	.mac_addr_remove = mlx4_mac_addr_remove,
 	.mac_addr_add = mlx4_mac_addr_add,
-#ifdef DPDK_6WIND
-	.dev_control = mlx4_dev_control,
-#endif /* DPDK_6WIND */
+	.mtu_get = mlx4_dev_get_mtu,
+	.mtu_set = mlx4_dev_set_mtu,
 	.fdir_add_signature_filter = NULL,
 	.fdir_update_signature_filter = NULL,
 	.fdir_remove_signature_filter = NULL,
