@@ -2767,145 +2767,197 @@ mlx4_link_update(struct rte_eth_dev *dev, int wait_to_complete)
 #ifdef DPDK_6WIND
 
 static int
-mlx4_dev_control(struct rte_eth_dev *dev, uint32_t command, void *arg)
+mlx4_dev_get_mtu(struct rte_eth_dev *dev, uint16_t *mtu)
 {
 	struct priv *priv = dev->data->dev_private;
+	struct ifreq ifr;
+	int ret;
+
+	priv_lock(priv);
+	if (priv_ifreq(priv, SIOCGIFMTU, &ifr)) {
+		ret = errno;
+		DEBUG("ioctl(SIOCGIFMTU) failed: %s", strerror(errno));
+		goto out;
+	}
+	priv->mtu = ifr.ifr_mtu;
+	*mtu = priv->mtu;
+	ret = 0;
+
+out:
+	priv_unlock(priv);
+	return ret;
+}
+
+static int
+mlx4_dev_set_mtu(struct rte_eth_dev *dev, uint16_t *mtu)
+{
+	struct priv *priv = dev->data->dev_private;
+	struct ifreq ifr;
+	int ret;
+	unsigned int i;
+	int ok;
+
+	ifr.ifr_mtu = *mtu;
+	priv_lock(priv);
+	if (priv_ifreq(priv, SIOCSIFMTU, &ifr)) {
+		ret = errno;
+		DEBUG("ioctl(SIOCSIFMTU) failed: %s", strerror(errno));
+		goto out;
+	}
+	dev->rx_pkt_burst = removed_rx_burst;
+	dev->data->dev_conf.rxmode.jumbo_frame = (*mtu > ETHER_MAX_LEN);
+	dev->data->dev_conf.rxmode.max_rx_pkt_len = *mtu;
+	/* Make sure everyone has left mlx4_rx_burst(). */
+	rte_wmb();
+	usleep(1000);
+	/* Reconfigure each RX queue. */
+	ok = 0;
+	for (i = 0; (i != priv->rxqs_n); ++i) {
+		struct rxq *rxq = (*priv->rxqs)[i];
+		uint16_t desc;
+		unsigned int socket;
+		struct rte_eth_rxconf *conf;
+		struct rte_mempool *mp;
+
+		if (rxq == NULL)
+			continue;
+		desc = (rxq->elts_n *
+			(rxq->sp ? MLX4_PMD_SGE_WR_N : 1));
+		socket = rxq->socket;
+		conf = NULL; /* Currently unused. */
+		mp = rxq->mp;
+		rxq_cleanup(rxq);
+		if (rxq_setup(dev, rxq, desc, socket, conf, mp)) {
+			/* This queue is now dead, with no way to
+			 * recover. Just prevent mlx4_rx_burst() from
+			 * crashing during the next call by enabling
+			 * SP mode. mlx4_rx_burst_sp() has an
+			 * additional check for this case. */
+			rxq->sp = 1;
+			continue;
+		}
+		/* Reenable non-RSS queue attributes. No need to check
+		 * for errors at this stage. */
+		if (!priv->rss) {
+			rxq_mac_addrs_add(rxq);
+			if (priv->promisc)
+				rxq_promiscuous_enable(rxq);
+			if (priv->allmulti)
+				rxq_allmulticast_enable(rxq);
+		}
+		if (!rxq->sp) {
+			if (*mtu <= (rxq->mb_len - RTE_PKTMBUF_HEADROOM))
+				ok |= 1;
+		}
+		else {
+			if (*mtu <= ((rxq->mb_len * MLX4_PMD_SGE_WR_N) -
+				     RTE_PKTMBUF_HEADROOM))
+				ok |= 2;
+		}
+	}
+	/* Burst functions can now be called again. */
+	if (ok & 2)
+		dev->rx_pkt_burst = mlx4_rx_burst_sp;
+	else
+		dev->rx_pkt_burst = mlx4_rx_burst;
+	if (!ok) {
+		ret = EINVAL;
+		goto out;
+	}
+	priv->mtu = *mtu;
+	ret = 0;
+
+out:
+	priv_unlock(priv);
+	return ret;
+}
+
+static int
+mlx4_dev_get_flow_ctrl(struct rte_eth_dev *dev, struct rte_dev_pauseparam *pause)
+{
+	struct priv *priv = dev->data->dev_private;
+	struct ifreq ifr;
+	struct ethtool_pauseparam ethpause;
+	int ret;
+
+	ifr.ifr_data = &ethpause;
+	ethpause.cmd = ETHTOOL_GPAUSEPARAM;
+	priv_lock(priv);
+	if (priv_ifreq(priv, SIOCETHTOOL, &ifr)) {
+		ret = errno;
+		DEBUG("ioctl(SIOCETHTOOL, ETHTOOL_GPAUSEPARAM)"
+		      " failed: %s",
+		      strerror(errno));
+		goto out;
+	}
+	*pause = (struct rte_dev_pauseparam){
+		.autoneg = ethpause.autoneg,
+		.rx_pause = ethpause.rx_pause,
+		.tx_pause = ethpause.tx_pause
+	};
+	ret = 0;
+
+out:
+	priv_unlock(priv);
+	return ret;
+}
+
+static int
+mlx4_dev_set_flow_ctrl(struct rte_eth_dev *dev, struct rte_dev_pauseparam *pause)
+{
+	struct priv *priv = dev->data->dev_private;
+	struct ifreq ifr;
+	struct ethtool_pauseparam ethpause;
+	int ret;
+
+	ifr.ifr_data = &ethpause;
+	ethpause = (struct ethtool_pauseparam){
+		.cmd = ETHTOOL_SPAUSEPARAM,
+		.autoneg = pause->autoneg,
+		.rx_pause = pause->rx_pause,
+		.tx_pause = pause->tx_pause
+	};
+	priv_lock(priv);
+	if (priv_ifreq(priv, SIOCETHTOOL, &ifr)) {
+		ret = errno;
+		DEBUG("ioctl(SIOCETHTOOL, ETHTOOL_SPAUSEPARAM)"
+		      " failed: %s",
+		      strerror(errno));
+		goto out;
+	}
+	ret = 0;
+
+out:
+	priv_unlock(priv);
+	return ret;
+}
+
+static int
+mlx4_dev_control(struct rte_eth_dev *dev, uint32_t command, void *arg)
+{
 	union {
 		uint16_t u16;
 		struct rte_dev_pauseparam pause;
 	} *data = arg;
 	int ret;
-	unsigned int i;
-	int ok;
-	struct ifreq ifr;
-	union {
-		struct ethtool_pauseparam pause;
-	} ethtool;
 
-	priv_lock(priv);
 	switch (command) {
 	case RTE_DEV_CMD_GET_MTU:
-		if (priv_ifreq(priv, SIOCGIFMTU, &ifr)) {
-			ret = errno;
-			DEBUG("ioctl(SIOCGIFMTU) failed: %s", strerror(errno));
-			break;
-		}
-		priv->mtu = ifr.ifr_mtu;
-		data->u16 = priv->mtu;
-		ret = 0;
+		ret = mlx4_dev_get_mtu(dev, &data->u16);
 		break;
 	case RTE_DEV_CMD_SET_MTU:
-		ifr.ifr_mtu = data->u16;
-		if (priv_ifreq(priv, SIOCSIFMTU, &ifr)) {
-			ret = errno;
-			DEBUG("ioctl(SIOCSIFMTU) failed: %s", strerror(errno));
-			break;
-		}
-		dev->rx_pkt_burst = removed_rx_burst;
-		dev->data->dev_conf.rxmode.jumbo_frame =
-			(data->u16 > ETHER_MAX_LEN);
-		dev->data->dev_conf.rxmode.max_rx_pkt_len = data->u16;
-		/* Make sure everyone has left mlx4_rx_burst(). */
-		rte_wmb();
-		usleep(1000);
-		/* Reconfigure each RX queue. */
-		ok = 0;
-		for (i = 0; (i != priv->rxqs_n); ++i) {
-			struct rxq *rxq = (*priv->rxqs)[i];
-			uint16_t desc;
-			unsigned int socket;
-			struct rte_eth_rxconf *conf;
-			struct rte_mempool *mp;
-
-			if (rxq == NULL)
-				continue;
-			desc = (rxq->elts_n *
-				(rxq->sp ? MLX4_PMD_SGE_WR_N : 1));
-			socket = rxq->socket;
-			conf = NULL; /* Currently unused. */
-			mp = rxq->mp;
-			rxq_cleanup(rxq);
-			if (rxq_setup(dev, rxq, desc, socket, conf, mp)) {
-				/* This queue is now dead, with no way to
-				 * recover. Just prevent mlx4_rx_burst() from
-				 * crashing during the next call by enabling
-				 * SP mode. mlx4_rx_burst_sp() has an
-				 * additional check for this case. */
-				rxq->sp = 1;
-				continue;
-			}
-			/* Reenable non-RSS queue attributes. No need to check
-			 * for errors at this stage. */
-			if (!priv->rss) {
-				rxq_mac_addrs_add(rxq);
-				if (priv->promisc)
-					rxq_promiscuous_enable(rxq);
-				if (priv->allmulti)
-					rxq_allmulticast_enable(rxq);
-			}
-			if (!rxq->sp) {
-				if (data->u16 <= (rxq->mb_len -
-						  RTE_PKTMBUF_HEADROOM))
-					ok |= 1;
-			}
-			else {
-				if (data->u16 <= ((rxq->mb_len *
-						   MLX4_PMD_SGE_WR_N) -
-						  RTE_PKTMBUF_HEADROOM))
-					ok |= 2;
-			}
-		}
-		/* Burst functions can now be called again. */
-		if (ok & 2)
-			dev->rx_pkt_burst = mlx4_rx_burst_sp;
-		else
-			dev->rx_pkt_burst = mlx4_rx_burst;
-		if (!ok) {
-			ret = EINVAL;
-			break;
-		}
-		priv->mtu = data->u16;
-		ret = 0;
+		ret = mlx4_dev_set_mtu(dev, &data->u16);
 		break;
 	case RTE_DEV_CMD_GET_PAUSEPARAM:
-		ifr.ifr_data = &ethtool.pause;
-		ethtool.pause.cmd = ETHTOOL_GPAUSEPARAM;
-		if (priv_ifreq(priv, SIOCETHTOOL, &ifr)) {
-			ret = errno;
-			DEBUG("ioctl(SIOCETHTOOL, ETHTOOL_GPAUSEPARAM)"
-			      " failed: %s",
-			      strerror(errno));
-			break;
-		}
-		data->pause = (struct rte_dev_pauseparam){
-			.autoneg = ethtool.pause.autoneg,
-			.rx_pause = ethtool.pause.rx_pause,
-			.tx_pause = ethtool.pause.tx_pause
-		};
-		ret = 0;
+		ret = mlx4_dev_get_flow_ctrl(dev, &data->pause);
 		break;
 	case RTE_DEV_CMD_SET_PAUSEPARAM:
-		ifr.ifr_data = &ethtool.pause;
-		ethtool.pause = (struct ethtool_pauseparam){
-			.cmd = ETHTOOL_SPAUSEPARAM,
-			.autoneg = data->pause.autoneg,
-			.rx_pause = data->pause.rx_pause,
-			.tx_pause = data->pause.tx_pause
-		};
-		if (priv_ifreq(priv, SIOCETHTOOL, &ifr)) {
-			ret = errno;
-			DEBUG("ioctl(SIOCETHTOOL, ETHTOOL_SPAUSEPARAM)"
-			      " failed: %s",
-			      strerror(errno));
-			break;
-		}
-		ret = 0;
+		ret = mlx4_dev_set_flow_ctrl(dev, &data->pause);
 		break;
 	default:
 		ret = ENOTSUP;
 		break;
 	}
-	priv_unlock(priv);
 	return -ret;
 }
 
