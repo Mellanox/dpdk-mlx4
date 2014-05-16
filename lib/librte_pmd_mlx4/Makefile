@@ -83,8 +83,4 @@ endif
 # Default target if not set.
 RTE_TARGET = build
 
-ifeq ($(DPDK_6WIND),1)
-CFLAGS += -DDPDK_6WIND
-endif
-
 .PHONY: warn all clean doc FORCE

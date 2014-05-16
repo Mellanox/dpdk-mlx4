@@ -291,8 +291,6 @@ The following macros can be overridden on the command-line:
       DPDK output directory for generated files (default: *build*).
    DEBUG
       If *1*, enable driver debugging.
-   DPDK_6WIND
-      If *1*, enable 6WIND DPDK extensions.
    MLX4_PMD_SGE_WR_N
       Change the maximum number of scatter/gather elements per work
       request. The minimum value is 1, which disables support for segmented
