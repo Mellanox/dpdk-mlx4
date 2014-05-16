@@ -42,7 +42,6 @@
 #include <rte_mbuf.h>
 #include <rte_errno.h>
 #include <rte_mempool.h>
-#include <rte_version.h>
 #include <rte_prefetch.h>
 #include <rte_malloc.h>
 #include <rte_spinlock.h>
@@ -80,18 +79,6 @@ typedef struct ibv_send_wr mlx4_send_wr_t;
 #define mlx4_post_send ibv_post_send
 #endif
 
-#ifndef DPDK_VERSION
-#define DPDK_VERSION(x, y, z) ((x) << 16 | (y) << 8 | (z))
-#endif /* DPDK_VERSION */
-
-#ifndef BUILT_DPDK_VERSION
-#define BUILT_DPDK_VERSION \
-	DPDK_VERSION(RTE_VER_MAJOR, RTE_VER_MINOR, RTE_VER_PATCH_LEVEL)
-#endif /* BUILT_DPDK_VERSION */
-
-/* 6WIND/Intel DPDK compatibility. */
-#if !defined(DPDK_6WIND) || BUILT_DPDK_VERSION >= DPDK_VERSION(1, 6, 0)
-
 struct rte_rxq_stats {
 	uint64_t ipackets;  /**< Total of successfully received packets. */
 	uint64_t ibytes;    /**< Total of successfully received bytes. */
@@ -105,15 +92,8 @@ struct rte_txq_stats {
 	uint64_t odropped; /**< Total of packets not sent when TX ring full. */
 };
 
-#endif /* DPDK_6WIND */
-
-#if BUILT_DPDK_VERSION < DPDK_VERSION(1, 3, 0)
-typedef struct igb_tx_queue dpdk_txq_t;
-typedef struct igb_rx_queue dpdk_rxq_t;
-#else /* BUILT_DPDK_VERSION */
 typedef void dpdk_txq_t;
 typedef void dpdk_rxq_t;
-#endif /* BUILT_DPDK_VERSION */
 
 /* Helper to get the size of a memory pool. */
 static size_t mp_total_size(struct rte_mempool *mp)
@@ -422,8 +402,6 @@ dev_configure(struct rte_eth_dev *dev)
 	return ret;
 }
 
-#if BUILT_DPDK_VERSION >= DPDK_VERSION(1, 3, 0)
-
 static int
 mlx4_dev_configure(struct rte_eth_dev *dev)
 {
@@ -435,53 +413,6 @@ mlx4_dev_configure(struct rte_eth_dev *dev)
 	priv_unlock(priv);
 	return ret;
 }
-
-#else /* BUILT_DPDK_VERSION */
-
-static int
-mlx4_dev_configure(struct rte_eth_dev *dev, uint16_t rxqs_n, uint16_t txqs_n)
-{
-	struct priv *priv = dev->data->dev_private;
-	struct rxq *(*rxqs)[rxqs_n] = NULL;
-	struct txq *(*txqs)[txqs_n] = NULL;
-	int ret;
-
-	priv_lock(priv);
-	if ((rxqs_n == priv->rxqs_n) && (txqs_n == priv->txqs_n)) {
-		priv_unlock(priv);
-		return 0;
-	}
-	/* Changing the number of RX or TX queues with DPDK < 1.3.0 is
-	 * unsafe, thus not supported. */
-	if ((priv->rxqs_n) || (priv->txqs_n)) {
-		DEBUG("%p: changing the number of RX or TX queues is"
-		      " not supported",
-		      (void *)dev);
-		priv_unlock(priv);
-		return -EEXIST;
-	}
-	assert(priv->rxqs == NULL);
-	assert(priv->txqs == NULL);
-	/* Allocate arrays. */
-	if (((rxqs = rte_calloc("RXQs", 1, sizeof(*rxqs), 0)) == NULL) ||
-	    ((txqs = rte_calloc("TXQs", 1, sizeof(*txqs), 0)) == NULL)) {
-		DEBUG("%p: unable to allocate RX or TX queues descriptors: %s",
-		      (void *)dev, strerror(errno));
-		rte_free(rxqs);
-		rte_free(txqs);
-		priv_unlock(priv);
-		return -errno;
-	}
-	dev->data->nb_rx_queues = rxqs_n;
-	dev->data->rx_queues = (dpdk_rxq_t **)rxqs;
-	dev->data->nb_tx_queues = txqs_n;
-	dev->data->tx_queues = (dpdk_txq_t **)txqs;
-	ret = dev_configure(dev);
-	priv_unlock(priv);
-	return ret;
-}
-
-#endif /* BUILT_DPDK_VERSION */
 
 /* TX queues handling. */
 
@@ -1128,8 +1059,6 @@ mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	return ret;
 }
 
-#if BUILT_DPDK_VERSION >= DPDK_VERSION(1, 3, 0)
-
 static void
 mlx4_tx_queue_release(dpdk_txq_t *dpdk_txq)
 {
@@ -1152,8 +1081,6 @@ mlx4_tx_queue_release(dpdk_txq_t *dpdk_txq)
 	rte_free(txq);
 	priv_unlock(priv);
 }
-
-#endif /* BUILT_DPDKP_VERSION */
 
 /* RX queues handling. */
 
@@ -2351,8 +2278,6 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	return ret;
 }
 
-#if BUILT_DPDK_VERSION >= DPDK_VERSION(1, 3, 0)
-
 static void
 mlx4_rx_queue_release(dpdk_rxq_t *dpdk_rxq)
 {
@@ -2376,8 +2301,6 @@ mlx4_rx_queue_release(dpdk_rxq_t *dpdk_rxq)
 	rte_free(rxq);
 	priv_unlock(priv);
 }
-
-#endif /* BUILT_DPDK_VERSION */
 
 /* Simulate device start by attaching all configured flows. */
 static int
@@ -2470,14 +2393,6 @@ mlx4_dev_stop(struct rte_eth_dev *dev)
 	priv_unlock(priv);
 }
 
-#if BUILT_DPDK_VERSION < DPDK_VERSION(1, 3, 0)
-
-/* See mlx4_dev_infos_get() and mlx4_dev_close().
- * DPDK 1.2 leaves queues allocation and management to the PMD. */
-static void *removed_queue[512];
-
-#endif /* BUILT_DPDK_VERSION */
-
 static uint16_t
 removed_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 {
@@ -2515,10 +2430,6 @@ mlx4_dev_close(struct rte_eth_dev *dev)
 	if (priv->rxqs != NULL) {
 		/* XXX race condition if mlx4_rx_burst() is still running. */
 		usleep(1000);
-#if BUILT_DPDK_VERSION < DPDK_VERSION(1, 3, 0)
-		dev->data->nb_rx_queues = 0;
-		dev->data->rx_queues = (void *)removed_queue;
-#endif /* BUILT_DPDK_VERSION */
 		for (i = 0; (i != priv->rxqs_n); ++i) {
 			tmp = (*priv->rxqs)[i];
 			if (tmp == NULL)
@@ -2528,21 +2439,11 @@ mlx4_dev_close(struct rte_eth_dev *dev)
 			rte_free(tmp);
 		}
 		priv->rxqs_n = 0;
-#if BUILT_DPDK_VERSION < DPDK_VERSION(1, 3, 0)
-		tmp = priv->rxqs;
 		priv->rxqs = NULL;
-		rte_free(tmp);
-#else /* BUILT_DPDK_VERSION */
-		priv->rxqs = NULL;
-#endif /* BUILT_DPDK_VERSION */
 	}
 	if (priv->txqs != NULL) {
 		/* XXX race condition if mlx4_tx_burst() is still running. */
 		usleep(1000);
-#if BUILT_DPDK_VERSION < DPDK_VERSION(1, 3, 0)
-		dev->data->nb_tx_queues = 0;
-		dev->data->tx_queues = (void *)removed_queue;
-#endif /* BUILT_DPDK_VERSION */
 		for (i = 0; (i != priv->txqs_n); ++i) {
 			tmp = (*priv->txqs)[i];
 			if (tmp == NULL)
@@ -2552,13 +2453,7 @@ mlx4_dev_close(struct rte_eth_dev *dev)
 			rte_free(tmp);
 		}
 		priv->txqs_n = 0;
-#if BUILT_DPDK_VERSION < DPDK_VERSION(1, 3, 0)
-		tmp = priv->txqs;
 		priv->txqs = NULL;
-		rte_free(tmp);
-#else /* BUILT_DPDK_VERSION */
-		priv->txqs = NULL;
-#endif /* BUILT_DPDK_VERSION */
 	}
 	if (priv->rss)
 		rxq_cleanup(&priv->rxq_parent);
@@ -2589,13 +2484,6 @@ mlx4_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *info)
 	 */
 	max = ((priv->device_attr.max_cq > priv->device_attr.max_qp) ?
 	       priv->device_attr.max_qp : priv->device_attr.max_cq);
-#if BUILT_DPDK_VERSION < DPDK_VERSION(1, 3, 0)
-	/*
-	 * The number of dummy queue pointers available to replace them
-	 * during mlx4_dev_close() also limit this value.
-	 */
-	max = ((max > elemof(removed_queue)) ? elemof(removed_queue) : max);
-#endif /* BUILT_DPDK_VERSION */
 	/* If max >= 65535 then max = 0, max_rx_queues is uint16_t. */
 	if (max >= 65535) {
 		max = 65535;
@@ -2661,84 +2549,6 @@ mlx4_stats_reset(struct rte_eth_dev *dev)
 #endif
 	priv_unlock(priv);
 }
-
-#if defined(DPDK_6WIND) && BUILT_DPDK_VERSION < DPDK_VERSION(1, 6, 0)
-
-static void
-mlx4_rxq_stats_get(struct rte_eth_dev *dev, uint16_t idx,
-		   struct rte_rxq_stats *stats)
-{
-	struct priv *priv = dev->data->dev_private;
-
-	priv_lock(priv);
-	assert(idx < priv->rxqs_n);
-	if ((*priv->rxqs)[idx] == NULL) {
-		priv_unlock(priv);
-		return;
-	}
-	*stats = (*priv->rxqs)[idx]->stats;
-#ifndef MLX4_PMD_SOFT_COUNTERS
-	/* FIXME: add hardware counters. */
-#endif
-	priv_unlock(priv);
-}
-
-static void
-mlx4_txq_stats_get(struct rte_eth_dev *dev, uint16_t idx,
-		   struct rte_txq_stats *stats)
-{
-	struct priv *priv = dev->data->dev_private;
-
-	priv_lock(priv);
-	assert(idx < priv->txqs_n);
-	if ((*priv->txqs)[idx] == NULL) {
-		priv_unlock(priv);
-		return;
-	}
-	*stats = (*priv->txqs)[idx]->stats;
-#ifndef MLX4_PMD_SOFT_COUNTERS
-	/* FIXME: add hardware counters. */
-#endif
-	priv_unlock(priv);
-}
-
-static void
-mlx4_rxq_stats_reset(struct rte_eth_dev *dev, uint16_t idx)
-{
-	struct priv *priv = dev->data->dev_private;
-
-	priv_lock(priv);
-	assert(idx < priv->rxqs_n);
-	if ((*priv->rxqs)[idx] == NULL) {
-		priv_unlock(priv);
-		return;
-	}
-	(*priv->rxqs)[idx]->stats = (struct rte_rxq_stats){ .ipackets = 0 };
-#ifndef MLX4_PMD_SOFT_COUNTERS
-	/* FIXME: reset hardware counters. */
-#endif
-	priv_unlock(priv);
-}
-
-static void
-mlx4_txq_stats_reset(struct rte_eth_dev *dev, uint16_t idx)
-{
-	struct priv *priv = dev->data->dev_private;
-
-	priv_lock(priv);
-	assert(idx < priv->txqs_n);
-	if ((*priv->txqs)[idx] == NULL) {
-		priv_unlock(priv);
-		return;
-	}
-	(*priv->txqs)[idx]->stats = (struct rte_txq_stats){ .opackets = 0 };
-#ifndef MLX4_PMD_SOFT_COUNTERS
-	/* FIXME: reset hardware counters. */
-#endif
-	priv_unlock(priv);
-}
-
-#endif /* DPDK_6WIND */
 
 static void
 mlx4_mac_addr_remove(struct rte_eth_dev *dev, uint32_t index)
@@ -3179,20 +2989,6 @@ vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 	return 0;
 }
 
-#if BUILT_DPDK_VERSION < DPDK_VERSION(1, 3, 0)
-
-static void
-mlx4_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
-{
-	struct priv *priv = dev->data->dev_private;
-
-	priv_lock(priv);
-	vlan_filter_set(dev, vlan_id, on);
-	priv_unlock(priv);
-}
-
-#else /* BUILT_DPDK_VERSION */
-
 static int
 mlx4_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 {
@@ -3204,8 +3000,6 @@ mlx4_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 	priv_unlock(priv);
 	return ret;
 }
-
-#endif /* BUILT_DPDK_VERSION */
 
 static struct eth_dev_ops mlx4_dev_ops = {
 	.dev_configure = mlx4_dev_configure,
@@ -3219,34 +3013,20 @@ static struct eth_dev_ops mlx4_dev_ops = {
 	.link_update = mlx4_link_update,
 	.stats_get = mlx4_stats_get,
 	.stats_reset = mlx4_stats_reset,
-#if defined(DPDK_6WIND) && BUILT_DPDK_VERSION < DPDK_VERSION(1, 6, 0)
-	.rxq_stats_get = mlx4_rxq_stats_get,
-	.txq_stats_get = mlx4_txq_stats_get,
-	.rxq_stats_reset = mlx4_rxq_stats_reset,
-	.txq_stats_reset = mlx4_txq_stats_reset,
-#endif /* DPDK_6WIND */
-#if BUILT_DPDK_VERSION >= DPDK_VERSION(1, 3, 0)
 	.queue_stats_mapping_set = NULL,
-#endif /* BUILT_DPDK_VERSION */
 	.dev_infos_get = mlx4_dev_infos_get,
 	.vlan_filter_set = mlx4_vlan_filter_set,
-#if BUILT_DPDK_VERSION >= DPDK_VERSION(1, 3, 0)
 	.vlan_tpid_set = NULL,
 	.vlan_strip_queue_set = NULL,
 	.vlan_offload_set = NULL,
-#endif /* BUILT_DPDK_VERSION */
 	.rx_queue_setup = mlx4_rx_queue_setup,
 	.tx_queue_setup = mlx4_tx_queue_setup,
-#if BUILT_DPDK_VERSION >= DPDK_VERSION(1, 3, 0)
 	.rx_queue_release = mlx4_rx_queue_release,
 	.tx_queue_release = mlx4_tx_queue_release,
-#endif /* BUILT_DPDK_VERSION */
 	.dev_led_on = NULL,
 	.dev_led_off = NULL,
 	.flow_ctrl_set = NULL,
-#if BUILT_DPDK_VERSION >= DPDK_VERSION(1, 3, 0)
 	.priority_flow_ctrl_set = NULL,
-#endif /* BUILT_DPDK_VERSION */
 	.mac_addr_remove = mlx4_mac_addr_remove,
 	.mac_addr_add = mlx4_mac_addr_add,
 #ifdef DPDK_6WIND
