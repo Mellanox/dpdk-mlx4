@@ -79,14 +79,16 @@ typedef struct ibv_send_wr mlx4_send_wr_t;
 #define mlx4_post_send ibv_post_send
 #endif
 
-struct rte_rxq_stats {
+struct mlx4_rxq_stats {
+	unsigned int idx; /**< Mapping index. */
 	uint64_t ipackets;  /**< Total of successfully received packets. */
 	uint64_t ibytes;    /**< Total of successfully received bytes. */
 	uint64_t idropped;  /**< Total of packets dropped when RX ring full. */
 	uint64_t rx_nombuf; /**< Total of RX mbuf allocation failures. */
 };
 
-struct rte_txq_stats {
+struct mlx4_txq_stats {
+	unsigned int idx; /**< Mapping index. */
 	uint64_t opackets; /**< Total of successfully sent packets. */
 	uint64_t obytes;   /**< Total of successfully sent bytes. */
 	uint64_t odropped; /**< Total of packets not sent when TX ring full. */
@@ -143,7 +145,7 @@ struct rxq {
 	} elts;
 	unsigned int sp:1; /* Use scattered RX elements. */
 	uint32_t mb_len; /* Length of a mp-issued mbuf. */
-	struct rte_rxq_stats stats; /* RX queue counters. */
+	struct mlx4_rxq_stats stats; /* RX queue counters. */
 	unsigned int socket; /* CPU socket ID for allocations. */
 };
 
@@ -181,7 +183,7 @@ struct txq {
 	unsigned int elts_used; /* Number of used WRs (including elts_comp). */
 	unsigned int elts_free; /* Number of free WRs. */
 	struct txq_buf *lost_comp; /* Elements without a completion event. */
-	struct rte_txq_stats stats; /* TX queue counters. */
+	struct mlx4_txq_stats stats; /* TX queue counters. */
 	unsigned int socket; /* CPU socket ID for allocations. */
 };
 
@@ -1046,6 +1048,7 @@ mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	if (ret)
 		rte_free(txq);
 	else {
+		txq->stats.idx = idx;
 		DEBUG("%p: adding TX queue %p to list",
 		      (void *)dev, (void *)txq);
 		(*priv->txqs)[idx] = txq;
@@ -2262,6 +2265,7 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	if (ret)
 		rte_free(rxq);
 	else {
+		rxq->stats.idx = idx;
 		DEBUG("%p: adding RX queue %p to list",
 		      (void *)dev, (void *)rxq);
 		(*priv->rxqs)[idx] = rxq;
@@ -2497,23 +2501,41 @@ mlx4_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 	struct priv *priv = dev->data->dev_private;
 	struct rte_eth_stats tmp = { .ipackets = 0 };
 	unsigned int i;
+	unsigned int idx;
 
 	priv_lock(priv);
 	/* Add software counters. */
 	for (i = 0; (i != priv->rxqs_n); ++i) {
-		if ((*priv->rxqs)[i] == NULL)
+		struct rxq *rxq = (*priv->rxqs)[i];
+
+		if (rxq == NULL)
 			continue;
-		tmp.ipackets += (*priv->rxqs)[i]->stats.ipackets;
-		tmp.ibytes += (*priv->rxqs)[i]->stats.ibytes;
-		tmp.ierrors += (*priv->rxqs)[i]->stats.idropped;
-		tmp.rx_nombuf += (*priv->rxqs)[i]->stats.rx_nombuf;
+		idx = rxq->stats.idx;
+		if (idx < RTE_ETHDEV_QUEUE_STAT_CNTRS) {
+			tmp.q_ipackets[idx] += rxq->stats.ipackets;
+			tmp.q_ibytes[idx] += rxq->stats.ibytes;
+			tmp.q_errors[idx] += (rxq->stats.idropped +
+					      rxq->stats.rx_nombuf);
+		}
+		tmp.ipackets += rxq->stats.ipackets;
+		tmp.ibytes += rxq->stats.ibytes;
+		tmp.ierrors += rxq->stats.idropped;
+		tmp.rx_nombuf += rxq->stats.rx_nombuf;
 	}
 	for (i = 0; (i != priv->txqs_n); ++i) {
-		if ((*priv->txqs)[i] == NULL)
+		struct txq *txq = (*priv->txqs)[i];
+
+		if (txq == NULL)
 			continue;
-		tmp.opackets += (*priv->txqs)[i]->stats.opackets;
-		tmp.obytes += (*priv->txqs)[i]->stats.obytes;
-		tmp.oerrors += (*priv->txqs)[i]->stats.odropped;
+		idx = txq->stats.idx;
+		if (idx < RTE_ETHDEV_QUEUE_STAT_CNTRS) {
+			tmp.q_opackets[idx] += txq->stats.opackets;
+			tmp.q_obytes[idx] += txq->stats.obytes;
+			tmp.q_errors[idx] += txq->stats.odropped;
+		}
+		tmp.opackets += txq->stats.opackets;
+		tmp.obytes += txq->stats.obytes;
+		tmp.oerrors += txq->stats.odropped;
 	}
 #ifndef MLX4_PMD_SOFT_COUNTERS
 	/* FIXME: retrieve and add hardware counters. */
@@ -2527,19 +2549,22 @@ mlx4_stats_reset(struct rte_eth_dev *dev)
 {
 	struct priv *priv = dev->data->dev_private;
 	unsigned int i;
+	unsigned int idx;
 
 	priv_lock(priv);
 	for (i = 0; (i != priv->rxqs_n); ++i) {
 		if ((*priv->rxqs)[i] == NULL)
 			continue;
+		idx = (*priv->rxqs)[i]->stats.idx;
 		(*priv->rxqs)[i]->stats =
-			(struct rte_rxq_stats){ .ipackets = 0 };
+			(struct mlx4_rxq_stats){ .idx = idx };
 	}
 	for (i = 0; (i != priv->txqs_n); ++i) {
 		if ((*priv->txqs)[i] == NULL)
 			continue;
+		idx = (*priv->rxqs)[i]->stats.idx;
 		(*priv->txqs)[i]->stats =
-			(struct rte_txq_stats){ .opackets = 0 };
+			(struct mlx4_txq_stats){ .idx = idx };
 	}
 #ifndef MLX4_PMD_SOFT_COUNTERS
 	/* FIXME: reset hardware counters. */
