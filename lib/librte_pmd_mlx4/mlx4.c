@@ -92,9 +92,6 @@ struct rte_txq_stats {
 	uint64_t odropped; /**< Total of packets not sent when TX ring full. */
 };
 
-typedef void dpdk_txq_t;
-typedef void dpdk_rxq_t;
-
 /* Helper to get the size of a memory pool. */
 static size_t mp_total_size(struct rte_mempool *mp)
 {
@@ -707,7 +704,7 @@ txq_mp2mr(struct txq *txq, struct rte_mempool *mp)
 }
 
 static uint16_t
-mlx4_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
+mlx4_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 {
 	struct txq *txq = (struct txq *)dpdk_txq;
 	mlx4_send_wr_t head;
@@ -1060,7 +1057,7 @@ mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 }
 
 static void
-mlx4_tx_queue_release(dpdk_txq_t *dpdk_txq)
+mlx4_tx_queue_release(void *dpdk_txq)
 {
 	struct txq *txq = (struct txq *)dpdk_txq;
 	struct priv *priv;
@@ -1683,10 +1680,10 @@ rxq_cleanup(struct rxq *rxq)
 }
 
 static uint16_t
-mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n);
+mlx4_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n);
 
 static uint16_t
-mlx4_rx_burst_sp(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
+mlx4_rx_burst_sp(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 {
 	struct rxq *rxq = (struct rxq *)dpdk_rxq;
 	struct rxq_elt_sp (*elts)[rxq->elts_n] = rxq->elts.sp;
@@ -1859,7 +1856,7 @@ mlx4_rx_burst_sp(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
  * size of the first segment.
  */
 static uint16_t
-mlx4_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
+mlx4_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 {
 	struct rxq *rxq = (struct rxq *)dpdk_rxq;
 	struct rxq_elt (*elts)[rxq->elts_n] = rxq->elts.no_sp;
@@ -2279,7 +2276,7 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 }
 
 static void
-mlx4_rx_queue_release(dpdk_rxq_t *dpdk_rxq)
+mlx4_rx_queue_release(void *dpdk_rxq)
 {
 	struct rxq *rxq = (struct rxq *)dpdk_rxq;
 	struct priv *priv;
@@ -2394,7 +2391,7 @@ mlx4_dev_stop(struct rte_eth_dev *dev)
 }
 
 static uint16_t
-removed_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
+removed_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 {
 	(void)dpdk_txq;
 	(void)pkts;
@@ -2403,7 +2400,7 @@ removed_tx_burst(dpdk_txq_t *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 }
 
 static uint16_t
-removed_rx_burst(dpdk_rxq_t *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
+removed_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 {
 	(void)dpdk_rxq;
 	(void)pkts;
