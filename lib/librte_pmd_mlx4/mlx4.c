@@ -241,68 +241,49 @@ priv_unlock(struct priv *priv)
 	rte_spinlock_unlock(&priv->lock);
 }
 
+/* Allocate a buffer on the stack and fill it with a printf format string. */
+#define MKSTR(name, ...) \
+	char name[snprintf(NULL, 0, __VA_ARGS__) + 1]; \
+	\
+	snprintf(name, sizeof(name), __VA_ARGS__)
+
 /* Get interface name from priv. */
 static int
 priv_get_ifname(const struct priv *priv, char (*ifname)[IF_NAMESIZE])
 {
-	size_t len = 0;
-	int ret;
+	int ret = -1;
 	DIR *dir;
 	struct dirent *dent;
 
-	do {
-		char path[len + 1];
+	{
+		MKSTR(path, "%s/device/net", priv->ctx->device->ibdev_path);
 
-		ret = snprintf(path, (len + 1), "%s/device/net",
-			       priv->ctx->device->ibdev_path);
-		if (ret <= 0)
-			return errno;
-		if (len == 0) {
-			len = ret;
-			continue;
-		}
 		dir = opendir(path);
 		if (dir == NULL)
-			return errno;
-		break;
+			return -1;
 	}
-	while (1);
-	ret = -1;
 	while ((dent = readdir(dir)) != NULL) {
 		char *name = dent->d_name;
 		FILE *file;
 		unsigned int dev_id;
+		int r;
 
 		if ((name[0] == '.') &&
 		    ((name[1] == '\0') ||
 		     ((name[1] == '.') && (name[2] == '\0'))))
 			continue;
-		len = 0;
-		do {
-			char path[len + 1];
 
-			ret = snprintf(path, (len + 1),
-				       "%s/device/net/%s/dev_id",
-				       priv->ctx->device->ibdev_path,
-				       name);
-			if (ret <= 0)
-				break;
-			if (len == 0) {
-				len = ret;
-				continue;
-			}
-			file = fopen(path, "rb");
-			if (file == NULL)
-				break;
-			if ((fscanf(file, "%x", &dev_id) == 1) &&
-			    (dev_id == (priv->port - 1u)))
-				ret = 0;
-			fclose(file);
-			break;
-		}
-		while (1);
-		if (ret == 0) {
+		MKSTR(path, "%s/device/net/%s/dev_id",
+		      priv->ctx->device->ibdev_path, name);
+
+		file = fopen(path, "rb");
+		if (file == NULL)
+			continue;
+		r = fscanf(file, "%x", &dev_id);
+		fclose(file);
+		if ((r == 1) && (dev_id == (priv->port - 1u))) {
 			snprintf(*ifname, sizeof(*ifname), "%s", name);
+			ret = 0;
 			break;
 		}
 	}
@@ -319,12 +300,8 @@ priv_ifreq(const struct priv *priv, int req, struct ifreq *ifr)
 
 	if (sock == -1)
 		return ret;
-	if (priv_get_ifname(priv, &ifr->ifr_name)) {
-		errno = ENODEV;
-		goto end;
-	}
-	ret = ioctl(sock, req, ifr);
-end:
+	if (priv_get_ifname(priv, &ifr->ifr_name) == 0)
+		ret = ioctl(sock, req, ifr);
 	close(sock);
 	return ret;
 }
