@@ -291,6 +291,108 @@ priv_get_ifname(const struct priv *priv, char (*ifname)[IF_NAMESIZE])
 	return ret;
 }
 
+/* Read from sysfs entry. */
+static int
+priv_sysfs_read(const struct priv *priv, const char *entry,
+		char *buf, size_t size)
+{
+	char ifname[IF_NAMESIZE];
+	FILE *file;
+	int ret;
+	int err;
+
+	if (priv_get_ifname(priv, &ifname))
+		return -1;
+
+	MKSTR(path, "%s/device/net/%s/%s", priv->ctx->device->ibdev_path,
+	      ifname, entry);
+
+	file = fopen(path, "rb");
+	if (file == NULL)
+		return -1;
+	ret = fread(buf, 1, size, file);
+	err = errno;
+	if (((size_t)ret < size) && (ferror(file)))
+		ret = -1;
+	else
+		ret = size;
+	fclose(file);
+	errno = err;
+	return ret;
+}
+
+/* Write to sysfs entry. */
+static int
+priv_sysfs_write(const struct priv *priv, const char *entry,
+		 char *buf, size_t size)
+{
+	char ifname[IF_NAMESIZE];
+	FILE *file;
+	int ret;
+	int err;
+
+	if (priv_get_ifname(priv, &ifname))
+		return -1;
+
+	MKSTR(path, "%s/device/net/%s/%s", priv->ctx->device->ibdev_path,
+	      ifname, entry);
+
+	file = fopen(path, "wb");
+	if (file == NULL)
+		return -1;
+	ret = fwrite(buf, 1, size, file);
+	err = errno;
+	if (((size_t)ret < size) || (ferror(file)))
+		ret = -1;
+	else
+		ret = size;
+	fclose(file);
+	errno = err;
+	return ret;
+}
+
+/* Get unsigned long sysfs property. */
+static int
+priv_get_sysfs_ulong(struct priv *priv, const char *name, unsigned long *value)
+{
+	int ret;
+	unsigned long value_ret;
+	char value_str[32];
+
+	ret = priv_sysfs_read(priv, name, value_str, (sizeof(value_str) - 1));
+	if (ret == -1) {
+		DEBUG("cannot read %s value from sysfs: %s",
+		      name, strerror(errno));
+		return -1;
+	}
+	value_str[ret] = '\0';
+	errno = 0;
+	value_ret = strtoul(value_str, NULL, 0);
+	if (errno) {
+		DEBUG("invalid %s value `%s': %s", name, value_str,
+		      strerror(errno));
+		return -1;
+	}
+	*value = value_ret;
+	return 0;
+}
+
+/* Set unsigned long sysfs property. */
+static int
+priv_set_sysfs_ulong(struct priv *priv, const char *name, unsigned long value)
+{
+	int ret;
+	MKSTR(value_str, "%lu", value);
+
+	ret = priv_sysfs_write(priv, name, value_str, (sizeof(value_str) - 1));
+	if (ret == -1) {
+		DEBUG("cannot write %s `%s' (%lu) to sysfs: %s",
+		      name, value_str, value, strerror(errno));
+		return -1;
+	}
+	return 0;
+}
+
 /* Perform ifreq ioctl() on associated Ethernet device. */
 static int
 priv_ifreq(const struct priv *priv, int req, struct ifreq *ifr)
@@ -304,6 +406,25 @@ priv_ifreq(const struct priv *priv, int req, struct ifreq *ifr)
 		ret = ioctl(sock, req, ifr);
 	close(sock);
 	return ret;
+}
+
+/* Get device MTU. */
+static int
+priv_get_mtu(struct priv *priv, uint16_t *mtu)
+{
+	unsigned long ulong_mtu;
+
+	if (priv_get_sysfs_ulong(priv, "mtu", &ulong_mtu) == -1)
+		return -1;
+	*mtu = ulong_mtu;
+	return 0;
+}
+
+/* Set device MTU. */
+static int
+priv_set_mtu(struct priv *priv, uint16_t mtu)
+{
+	return priv_set_sysfs_ulong(priv, "mtu", mtu);
 }
 
 /* Device configuration. */
@@ -2079,17 +2200,16 @@ rxq_setup(struct rte_eth_dev *dev, struct rxq *rxq, uint16_t desc,
 	}
 	/* Try to increase MTU if lower than desired MRU. */
 	if (priv->mtu < dev->data->dev_conf.rxmode.max_rx_pkt_len) {
-		struct ifreq ifr;
+		uint16_t mtu = dev->data->dev_conf.rxmode.max_rx_pkt_len;
 
-		ifr.ifr_mtu = dev->data->dev_conf.rxmode.max_rx_pkt_len;
-		if (priv_ifreq(priv, SIOCSIFMTU, &ifr) == 0) {
+		if (priv_set_mtu(priv, mtu) == 0) {
 			DEBUG("adapter port %u MTU increased to %u",
-			      priv->port, ifr.ifr_mtu);
-			priv->mtu = ifr.ifr_mtu;
+			      priv->port, mtu);
+			priv->mtu = mtu;
 		}
 		else
 			DEBUG("unable to set port %u MTU to %u: %s",
-			      priv->port, ifr.ifr_mtu, strerror(errno));
+			      priv->port, mtu, strerror(errno));
 	}
 	DEBUG("%p: %s scattered packets support (%u WRs)",
 	      (void *)dev, (tmpl.sp ? "enabling" : "disabling"), desc);
@@ -2767,19 +2887,15 @@ static int
 mlx4_dev_get_mtu(struct rte_eth_dev *dev, uint16_t *mtu)
 {
 	struct priv *priv = dev->data->dev_private;
-	struct ifreq ifr;
 	int ret;
 
 	priv_lock(priv);
-	if (priv_ifreq(priv, SIOCGIFMTU, &ifr)) {
+	if (priv_get_mtu(priv, mtu)) {
 		ret = errno;
-		DEBUG("ioctl(SIOCGIFMTU) failed: %s", strerror(errno));
 		goto out;
 	}
-	priv->mtu = ifr.ifr_mtu;
-	*mtu = priv->mtu;
+	priv->mtu = *mtu;
 	ret = 0;
-
 out:
 	priv_unlock(priv);
 	return ret;
@@ -2789,16 +2905,13 @@ static int
 mlx4_dev_set_mtu(struct rte_eth_dev *dev, uint16_t *mtu)
 {
 	struct priv *priv = dev->data->dev_private;
-	struct ifreq ifr;
 	int ret;
 	unsigned int i;
 	int ok;
 
-	ifr.ifr_mtu = *mtu;
 	priv_lock(priv);
-	if (priv_ifreq(priv, SIOCSIFMTU, &ifr)) {
+	if (priv_set_mtu(priv, *mtu)) {
 		ret = errno;
-		DEBUG("ioctl(SIOCSIFMTU) failed: %s", strerror(errno));
 		goto out;
 	}
 	dev->rx_pkt_burst = removed_rx_burst;
@@ -3248,7 +3361,6 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		struct ibv_pd *pd = NULL;
 		struct priv *priv = NULL;
 		struct rte_eth_dev *eth_dev;
-		struct ifreq ifr;
 #if RSS_SUPPORT
 		struct ibv_exp_device_attr exp_device_attr = {
 			.comp_mask = (IBV_EXP_DEVICE_ATTR_FLAGS2 |
@@ -3364,8 +3476,7 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		}
 #endif
 		/* Get actual MTU if possible. */
-		if (priv_ifreq(priv, SIOCGIFMTU, &ifr) == 0)
-			priv->mtu = ifr.ifr_mtu;
+		priv_get_mtu(priv, &priv->mtu);
 		DEBUG("port %u MTU is %u", priv->port, priv->mtu);
 
 		/* from rte_ethdev.c */
