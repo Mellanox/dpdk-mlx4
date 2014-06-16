@@ -427,6 +427,19 @@ priv_set_mtu(struct priv *priv, uint16_t mtu)
 	return priv_set_sysfs_ulong(priv, "mtu", mtu);
 }
 
+/* Set device flags. */
+static int
+priv_set_flags(struct priv *priv, unsigned int keep, unsigned int flags)
+{
+	unsigned long tmp;
+
+	if (priv_get_sysfs_ulong(priv, "flags", &tmp) == -1)
+		return -1;
+	tmp &= keep;
+	tmp |= flags;
+	return priv_set_sysfs_ulong(priv, "flags", tmp);
+}
+
 /* Device configuration. */
 
 static int
@@ -3497,6 +3510,9 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		eth_dev->dev_ops = &mlx4_dev_ops;
 		eth_dev->data->mac_addrs = priv->mac;
 
+		/* Bring Ethernet device up. */
+		DEBUG("forcing Ethernet interface up");
+		priv_set_flags(priv, ~IFF_UP, IFF_UP);
 		continue;
 
 port_error:
