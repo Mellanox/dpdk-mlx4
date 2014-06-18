@@ -2201,28 +2201,12 @@ rxq_setup(struct rte_eth_dev *dev, struct rxq *rxq, uint16_t desc,
 		rte_pktmbuf_tailroom(buf)) == tmpl.mb_len);
 	assert(rte_pktmbuf_headroom(buf) == RTE_PKTMBUF_HEADROOM);
 	rte_pktmbuf_free(buf);
-	/*
-	 * Depending on mb_len, jumbo frames support and MRU, enable scattered
-	 * packets support for this queue.
-	 */
+	/* Enable scattered packets support for this queue if necessary. */
 	if ((dev->data->dev_conf.rxmode.jumbo_frame) &&
 	    (dev->data->dev_conf.rxmode.max_rx_pkt_len >
 	     (tmpl.mb_len - RTE_PKTMBUF_HEADROOM))) {
 		tmpl.sp = 1;
 		desc /= MLX4_PMD_SGE_WR_N;
-	}
-	/* Try to increase MTU if lower than desired MRU. */
-	if (priv->mtu < dev->data->dev_conf.rxmode.max_rx_pkt_len) {
-		uint16_t mtu = dev->data->dev_conf.rxmode.max_rx_pkt_len;
-
-		if (priv_set_mtu(priv, mtu) == 0) {
-			DEBUG("adapter port %u MTU increased to %u",
-			      priv->port, mtu);
-			priv->mtu = mtu;
-		}
-		else
-			DEBUG("unable to set port %u MTU to %u: %s",
-			      priv->port, mtu, strerror(errno));
 	}
 	DEBUG("%p: %s scattered packets support (%u WRs)",
 	      (void *)dev, (tmpl.sp ? "enabling" : "disabling"), desc);
@@ -2914,42 +2898,65 @@ out:
 	return ret;
 }
 
+/* Setting the MTU affects hardware MRU (packets larger than the MTU cannot be
+ * received). Use this as a hint to enable/disable scattered packets support
+ * and improve performance when not needed.
+ * Since failure is not an option, reconfiguring queues on the fly is not
+ * recommended. */
 static int
 mlx4_dev_set_mtu(struct rte_eth_dev *dev, uint16_t *mtu)
 {
 	struct priv *priv = dev->data->dev_private;
-	int ret;
+	int ret = 0;
 	unsigned int i;
-	int ok;
+	uint16_t (*rx_func)(void *, struct rte_mbuf **, uint16_t) =
+		mlx4_rx_burst;
 
 	priv_lock(priv);
+	/* Set kernel interface MTU first. */
 	if (priv_set_mtu(priv, *mtu)) {
 		ret = errno;
+		DEBUG("cannot set port %u MTU to %u: %s", priv->port, *mtu,
+		      strerror(errno));
+		*mtu = priv->mtu;
 		goto out;
 	}
+	else
+		DEBUG("adapter port %u MTU set to %u", priv->port, *mtu);
+	priv->mtu = *mtu;
+	/* Temporarily replace RX handler with a fake one, assuming it has not
+	 * been copied elsewhere. */
 	dev->rx_pkt_burst = removed_rx_burst;
-	dev->data->dev_conf.rxmode.jumbo_frame = (*mtu > ETHER_MAX_LEN);
-	dev->data->dev_conf.rxmode.max_rx_pkt_len = *mtu;
-	/* Make sure everyone has left mlx4_rx_burst(). */
+	/* Make sure everyone has left mlx4_rx_burst() and uses
+	 * removed_rx_burst() instead. */
 	rte_wmb();
 	usleep(1000);
 	/* Reconfigure each RX queue. */
-	ok = 0;
 	for (i = 0; (i != priv->rxqs_n); ++i) {
 		struct rxq *rxq = (*priv->rxqs)[i];
 		uint16_t desc;
 		unsigned int socket;
 		struct rte_eth_rxconf *conf;
 		struct rte_mempool *mp;
+		unsigned int max_frame_len;
+		int sp;
 
 		if (rxq == NULL)
 			continue;
+		/* Calculate new maximum frame length according to MTU and
+		 * toggle scattered support (sp) if necessary. */
+		max_frame_len = (priv->mtu + ETHER_HDR_LEN +
+				 (ETHER_MAX_VLAN_FRAME_LEN - ETHER_MAX_LEN));
+		sp = (max_frame_len > (rxq->mb_len - RTE_PKTMBUF_HEADROOM));
 		desc = (rxq->elts_n *
 			(rxq->sp ? MLX4_PMD_SGE_WR_N : 1));
 		socket = rxq->socket;
 		conf = NULL; /* Currently unused. */
 		mp = rxq->mp;
 		rxq_cleanup(rxq);
+		/* Provide new values to rxq_setup(). */
+		dev->data->dev_conf.rxmode.jumbo_frame = sp;
+		dev->data->dev_conf.rxmode.max_rx_pkt_len = max_frame_len;
 		if (rxq_setup(dev, rxq, desc, socket, conf, mp)) {
 			/* This queue is now dead, with no way to
 			 * recover. Just prevent mlx4_rx_burst() from
@@ -2957,7 +2964,12 @@ mlx4_dev_set_mtu(struct rte_eth_dev *dev, uint16_t *mtu)
 			 * SP mode. mlx4_rx_burst_sp() has an
 			 * additional check for this case. */
 			rxq->sp = 1;
-			continue;
+			rx_func = mlx4_rx_burst_sp;
+			if (errno)
+				ret = errno;
+			else
+				ret = ENOBUFS;
+			break;
 		}
 		/* Reenable non-RSS queue attributes. No need to check
 		 * for errors at this stage. */
@@ -2968,28 +2980,12 @@ mlx4_dev_set_mtu(struct rte_eth_dev *dev, uint16_t *mtu)
 			if (priv->allmulti)
 				rxq_allmulticast_enable(rxq);
 		}
-		if (!rxq->sp) {
-			if (*mtu <= (rxq->mb_len - RTE_PKTMBUF_HEADROOM))
-				ok |= 1;
-		}
-		else {
-			if (*mtu <= ((rxq->mb_len * MLX4_PMD_SGE_WR_N) -
-				     RTE_PKTMBUF_HEADROOM))
-				ok |= 2;
-		}
+		/* Scattered burst function takes priority. */
+		if (rxq->sp)
+			rx_func = mlx4_rx_burst_sp;
 	}
 	/* Burst functions can now be called again. */
-	if (ok & 2)
-		dev->rx_pkt_burst = mlx4_rx_burst_sp;
-	else
-		dev->rx_pkt_burst = mlx4_rx_burst;
-	if (!ok) {
-		ret = EINVAL;
-		goto out;
-	}
-	priv->mtu = *mtu;
-	ret = 0;
-
+	dev->rx_pkt_burst = rx_func;
 out:
 	priv_unlock(priv);
 	return ret;
