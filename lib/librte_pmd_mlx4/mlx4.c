@@ -3197,31 +3197,18 @@ static int
 mlx4_ibv_device_to_pci_addr(const struct ibv_device *device,
 			    struct rte_pci_addr *pci_addr)
 {
-	FILE *file = NULL;
-	size_t len = 0;
-	int ret;
+	FILE *file;
+	int ret = -1;
 	char line[32];
+	MKSTR(path, "%s/device/uevent", device->ibdev_path);
 
-	do {
-		char path[len + 1];
-
-		ret = snprintf(path, (len + 1), "%s/device/uevent",
-			       device->ibdev_path);
-		if (ret <= 0)
-			return errno;
-		if (len == 0) {
-			len = ret;
-			continue;
-		}
-		file = fopen(path, "rb");
-		if (file == NULL)
-			return errno;
-		break;
-	}
-	while (1);
+	file = fopen(path, "rb");
+	if (file == NULL)
+		return ret;
 	while (fgets(line, sizeof(line), file) == line) {
+		size_t len = strlen(line);
+
 		/* Truncate long lines. */
-		len = strlen(line);
 		if (len == (sizeof(line) - 1))
 			while (line[(len - 1)] != '\n') {
 				ret = fgetc(file);
@@ -3240,10 +3227,9 @@ mlx4_ibv_device_to_pci_addr(const struct ibv_device *device,
 			ret = 0;
 			break;
 		}
-		ret = ENODEV;
 	}
 	fclose(file);
-	return -ret;
+	return ret;
 }
 
 /* Derive MAC address from port GID. */
