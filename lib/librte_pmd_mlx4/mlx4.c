@@ -1831,6 +1831,7 @@ mlx4_rx_burst_sp(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		struct ibv_recv_wr *wr = &elt->wr;
 		struct rte_mbuf *pkt_buf = NULL; /* Buffer returned in pkts. */
 		struct rte_mbuf **pkt_buf_next = &pkt_buf;
+		unsigned int seg_headroom = RTE_PKTMBUF_HEADROOM;
 		unsigned int j = 0;
 
 		/* Sanity checks. */
@@ -1861,8 +1862,7 @@ mlx4_rx_burst_sp(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			struct ibv_sge *sge = &elt->sges[j];
 			struct rte_mbuf *seg = elt->bufs[j];
 			struct rte_mbuf *rep;
-			uint32_t seg_headroom;
-			uint32_t seg_tailroom;
+			unsigned int seg_tailroom;
 
 			/*
 			 * Fetch initial bytes of packet descriptor into a
@@ -1886,25 +1886,20 @@ mlx4_rx_burst_sp(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 				goto repost;
 			}
 #ifndef NDEBUG
-			else {
-				/* assert() checks below need this. */
-				rep->data_len = 0;
-			}
+			/* Poison user-modifiable fields in rep. */
+			rep->next = (void *)((uintptr_t)-1);
+			rep->data_off = 0xdead;
+			rep->data_len = 0xd00d;
+			rep->pkt_len = 0xdeadd00d;
+			rep->nb_segs = 0x2a;
+			rep->in_port = 0x2a;
+			rep->ol_flags = 0xffffffff;
 #endif
-			seg_headroom = seg->data_off;
-			seg_tailroom = (seg->buf_len - seg_headroom);
-			assert(seg_tailroom == rte_pktmbuf_tailroom(seg));
-			/* Only the first segment comes with headroom. */
-			assert((j == 0) ?
-			       (seg_headroom == RTE_PKTMBUF_HEADROOM) :
-			       (seg_headroom == 0));
-			rep->data_off = seg_headroom;
-			assert(rte_pktmbuf_headroom(rep) == seg_headroom);
-			assert(rte_pktmbuf_tailroom(rep) == seg_tailroom);
+			assert(rep->buf_len == seg->buf_len);
+			assert(rep->buf_len == rxq->mb_len);
 			/* Reconfigure sge to use rep instead of seg. */
-			sge->addr = (uintptr_t)rte_pktmbuf_mtod(rep, char *);
-			assert(sge->length == seg_tailroom);
 			assert(sge->lkey == rxq->mr->lkey);
+			sge->addr = ((uintptr_t)rep->buf_addr + seg_headroom);
 			elt->bufs[j] = rep;
 			++j;
 			/* Update pkt_buf if it's the first segment, or link
@@ -1912,23 +1907,35 @@ mlx4_rx_burst_sp(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			*pkt_buf_next = seg;
 			pkt_buf_next = &seg->next;
 			/* Update seg information. */
-			seg->nb_segs = 1;
-			seg->in_port = rxq->port_id;
+			seg_tailroom = (seg->buf_len - seg_headroom);
+			assert(sge->length == seg_tailroom);
+			seg->data_off = seg_headroom;
 			if (likely(len <= seg_tailroom)) {
 				/* Last segment. */
 				seg->data_len = len;
 				seg->pkt_len = len;
+				/* Sanity check. */
+				assert(rte_pktmbuf_headroom(seg) ==
+				       seg_headroom);
+				assert(rte_pktmbuf_tailroom(seg) ==
+				       (seg_tailroom - len));
 				break;
 			}
 			seg->data_len = seg_tailroom;
 			seg->pkt_len = seg_tailroom;
+			/* Sanity check. */
+			assert(rte_pktmbuf_headroom(seg) == seg_headroom);
+			assert(rte_pktmbuf_tailroom(seg) == 0);
+			/* Fix len and clear headroom for next segments. */
 			len -= seg_tailroom;
+			seg_headroom = 0;
 		}
 		/* Update head and tail segments. */
 		*pkt_buf_next = NULL;
 		assert(pkt_buf != NULL);
 		assert(j != 0);
 		pkt_buf->nb_segs = j;
+		pkt_buf->in_port = rxq->port_id;
 		pkt_buf->pkt_len = wc->byte_len;
 		pkt_buf->ol_flags = 0;
 
