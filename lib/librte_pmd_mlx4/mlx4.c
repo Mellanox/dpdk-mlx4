@@ -1196,7 +1196,8 @@ mlx4_tx_queue_release(void *dpdk_txq)
 /* RX queues handling. */
 
 static int
-rxq_alloc_elts_sp(struct rxq *rxq, unsigned int elts_n)
+rxq_alloc_elts_sp(struct rxq *rxq, unsigned int elts_n,
+		  struct rte_mbuf **pool)
 {
 	unsigned int i;
 	struct rxq_elt_sp (*elts)[elts_n] =
@@ -1226,9 +1227,17 @@ rxq_alloc_elts_sp(struct rxq *rxq, unsigned int elts_n)
 		/* For each SGE (segment). */
 		for (j = 0; (j != elemof(elt->bufs)); ++j) {
 			struct ibv_sge *sge = &(*sges)[j];
-			struct rte_mbuf *buf = rte_pktmbuf_alloc(rxq->mp);
+			struct rte_mbuf *buf;
 
+			if (pool != NULL) {
+				buf = *(pool++);
+				assert(buf != NULL);
+				rte_pktmbuf_reset(buf);
+			}
+			else
+				buf = rte_pktmbuf_alloc(rxq->mp);
 			if (buf == NULL) {
+				assert(pool == NULL);
 				DEBUG("%p: empty mbuf pool", (void *)rxq);
 				ret = ENOMEM;
 				goto error;
@@ -1270,6 +1279,7 @@ rxq_alloc_elts_sp(struct rxq *rxq, unsigned int elts_n)
 	return 0;
 error:
 	if (elts != NULL) {
+		assert(pool == NULL);
 		for (i = 0; (i != elemof(*elts)); ++i) {
 			unsigned int j;
 			struct rxq_elt_sp *elt = &(*elts)[i];
@@ -1315,7 +1325,7 @@ rxq_free_elts_sp(struct rxq *rxq)
 }
 
 static int
-rxq_alloc_elts(struct rxq *rxq, unsigned int elts_n)
+rxq_alloc_elts(struct rxq *rxq, unsigned int elts_n, struct rte_mbuf **pool)
 {
 	unsigned int i;
 	struct rxq_elt (*elts)[elts_n] =
@@ -1333,9 +1343,17 @@ rxq_alloc_elts(struct rxq *rxq, unsigned int elts_n)
 		struct rxq_elt *elt = &(*elts)[i];
 		struct ibv_recv_wr *wr = &elt->wr;
 		struct ibv_sge *sge = &(*elts)[i].sge;
-		struct rte_mbuf *buf = rte_pktmbuf_alloc(rxq->mp);
+		struct rte_mbuf *buf;
 
+		if (pool != NULL) {
+			buf = *(pool++);
+			assert(buf != NULL);
+			rte_pktmbuf_reset(buf);
+		}
+		else
+			buf = rte_pktmbuf_alloc(rxq->mp);
 		if (buf == NULL) {
+			assert(pool == NULL);
 			DEBUG("%p: empty mbuf pool", (void *)rxq);
 			ret = ENOMEM;
 			goto error;
@@ -1369,6 +1387,7 @@ rxq_alloc_elts(struct rxq *rxq, unsigned int elts_n)
 	return 0;
 error:
 	if (elts != NULL) {
+		assert(pool == NULL);
 		for (i = 0; (i != elemof(*elts)); ++i) {
 			struct rxq_elt *elt = &(*elts)[i];
 
@@ -2163,6 +2182,176 @@ rxq_setup_qp_rss(struct priv *priv, struct ibv_cq *cq, uint16_t desc,
 
 #endif /* RSS_SUPPORT */
 
+/*
+ * rxq_rehash() does not allocate mbufs, which, if not done from the right
+ * thread (such as a control thread), may corrupt the pool.
+ * In case of failure, the queue is left untouched.
+ */
+static int
+rxq_rehash(struct rte_eth_dev *dev, struct rxq *rxq)
+{
+	struct priv *priv = rxq->priv;
+	struct rxq tmpl = *rxq;
+	unsigned int mbuf_n;
+	unsigned int desc_n;
+	struct rte_mbuf **pool;
+	unsigned int i, k;
+	struct ibv_qp_attr mod;
+	struct ibv_recv_wr *bad_wr;
+	int err;
+	int parent = (rxq == &priv->rxq_parent);
+
+	if (parent) {
+		DEBUG("%p: cannot rehash parent queue %p",
+		      (void *)dev, (void *)rxq);
+		return -EINVAL;
+	}
+	DEBUG("%p: rehashing queue %p", (void *)dev, (void *)rxq);
+	/* Number of descriptors and mbufs currently allocated. */
+	desc_n = (tmpl.elts_n * (tmpl.sp ? MLX4_PMD_SGE_WR_N : 1));
+	mbuf_n = desc_n;
+	/* Enable scattered packets support for this queue if necessary. */
+	if ((dev->data->dev_conf.rxmode.jumbo_frame) &&
+	    (dev->data->dev_conf.rxmode.max_rx_pkt_len >
+	     (tmpl.mb_len - RTE_PKTMBUF_HEADROOM))) {
+		tmpl.sp = 1;
+		desc_n /= MLX4_PMD_SGE_WR_N;
+	}
+	else
+		tmpl.sp = 0;
+	DEBUG("%p: %s scattered packets support (%u WRs)",
+	      (void *)dev, (tmpl.sp ? "enabling" : "disabling"), desc_n);
+	/* If scatter mode is the same as before, nothing to do. */
+	if (tmpl.sp == rxq->sp) {
+		DEBUG("%p: nothing to do", (void *)dev);
+		return 0;
+	}
+	/* Remove attached flows if RSS is disabled (no parent queue). */
+	if (!priv->rss) {
+		rxq_allmulticast_disable(&tmpl);
+		rxq_promiscuous_disable(&tmpl);
+		rxq_mac_addrs_del(&tmpl);
+		/* Update original queue in case of failure. */
+		rxq->allmulti_flow = tmpl.allmulti_flow;
+		rxq->promisc_flow = tmpl.promisc_flow;
+		memcpy(rxq->mac_configured, tmpl.mac_configured,
+		       sizeof(rxq->mac_configured));
+		memcpy(rxq->mac_flow, tmpl.mac_flow, sizeof(rxq->mac_flow));
+	}
+	/* From now on, any failure will render the queue unusable.
+	 * Reinitialize QP. */
+	mod = (struct ibv_qp_attr){ .qp_state = IBV_QPS_RESET };
+	if ((err = ibv_modify_qp(tmpl.qp, &mod, IBV_QP_STATE))) {
+		DEBUG("%p: cannot reset QP: %s", (void *)dev, strerror(err));
+		return -err;
+	}
+	if ((err = ibv_resize_cq(tmpl.cq, desc_n))) {
+		DEBUG("%p: cannot resize CQ: %s", (void *)dev, strerror(err));
+		return -err;
+	}
+	mod = (struct ibv_qp_attr){
+		/* Move the QP to this state. */
+		.qp_state = IBV_QPS_INIT,
+		/* Primary port number. */
+		.port_num = priv->port
+	};
+	if ((err = ibv_modify_qp(tmpl.qp, &mod,
+				 (IBV_QP_STATE |
+#if RSS_SUPPORT
+				  (parent ? IBV_QP_GROUP_RSS : 0) |
+#endif /* RSS_SUPPORT */
+				  IBV_QP_PORT)))) {
+		DEBUG("%p: QP state to IBV_QPS_INIT failed: %s",
+		      (void *)dev, strerror(err));
+		return -err;
+	};
+	/* Reconfigure flows. Do not care for errors. */
+	if (!priv->rss) {
+		rxq_mac_addrs_add(&tmpl);
+		if (priv->promisc)
+			rxq_promiscuous_enable(&tmpl);
+		if (priv->allmulti)
+			rxq_allmulticast_enable(&tmpl);
+		/* Update original queue in case of failure. */
+		rxq->allmulti_flow = tmpl.allmulti_flow;
+		rxq->promisc_flow = tmpl.promisc_flow;
+		memcpy(rxq->mac_configured, tmpl.mac_configured,
+		       sizeof(rxq->mac_configured));
+		memcpy(rxq->mac_flow, tmpl.mac_flow, sizeof(rxq->mac_flow));
+	}
+	/* Allocate pool. */
+	pool = rte_malloc(__func__, (mbuf_n * sizeof(*pool)), 0);
+	if (pool == NULL) {
+		DEBUG("%p: cannot allocate memory", (void *)dev);
+		return -ENOBUFS;
+	}
+	/* Snatch mbufs from original queue. */
+	k = 0;
+	if (rxq->sp) {
+		struct rxq_elt_sp (*elts)[rxq->elts_n] = rxq->elts.sp;
+
+		for (i = 0; (i != elemof(*elts)); ++i) {
+			struct rxq_elt_sp *elt = &(*elts)[i];
+			unsigned int j;
+
+			for (j = 0; (j != elemof(elt->bufs)); ++j) {
+				assert(elt->bufs[j] != NULL);
+				pool[k++] = elt->bufs[j];
+			}
+		}
+	}
+	else {
+		struct rxq_elt (*elts)[rxq->elts_n] = rxq->elts.no_sp;
+
+		for (i = 0; (i != elemof(*elts)); ++i) {
+			struct rxq_elt *elt = &(*elts)[i];
+
+			assert((void *)elt->wr.wr_id != NULL);
+			pool[k++] = (void *)elt->wr.wr_id;
+		}
+        }
+	assert(k == mbuf_n);
+	tmpl.elts_n = 0;
+	tmpl.elts.sp = NULL;
+	assert((void *)&tmpl.elts.sp == (void *)&tmpl.elts.no_sp);
+	err = ((tmpl.sp) ?
+	       rxq_alloc_elts_sp(&tmpl, desc_n, pool) :
+	       rxq_alloc_elts(&tmpl, desc_n, pool));
+	if (err) {
+		DEBUG("%p: cannot reallocate WRs, aborting", (void *)dev);
+		rte_free(pool);
+		return -err;
+	}
+	assert(tmpl.elts_n == desc_n);
+	assert(tmpl.elts.sp != NULL);
+	rte_free(pool);
+	/* Clean up original data. */
+	rxq->elts_n = 0;
+	rte_free(rxq->elts.sp);
+	rxq->elts.sp = NULL;
+	/* Post WRs. */
+	if ((err = ibv_post_recv(tmpl.qp,
+				 (tmpl.sp ?
+				  &(*tmpl.elts.sp)[0].wr :
+				  &(*tmpl.elts.no_sp)[0].wr),
+				 &bad_wr))) {
+		DEBUG("%p: ibv_post_recv() failed for WR %p: %s",
+		      (void *)dev,
+		      (void *)bad_wr,
+		      strerror(err));
+		goto skip_rtr;
+	}
+	mod = (struct ibv_qp_attr){
+		.qp_state = IBV_QPS_RTR
+	};
+	if ((err = ibv_modify_qp(tmpl.qp, &mod, IBV_QP_STATE)))
+		DEBUG("%p: QP state to IBV_QPS_RTR failed: %s",
+		      (void *)dev, strerror(err));
+skip_rtr:
+	*rxq = tmpl;
+	return err;
+}
+
 static int
 rxq_setup(struct rte_eth_dev *dev, struct rxq *rxq, uint16_t desc,
 	  unsigned int socket, const struct rte_eth_rxconf *conf,
@@ -2281,9 +2470,9 @@ skip_mr:
 	if (parent)
 		goto skip_alloc;
 	if (tmpl.sp)
-		ret = rxq_alloc_elts_sp(&tmpl, desc);
+		ret = rxq_alloc_elts_sp(&tmpl, desc, NULL);
 	else
-		ret = rxq_alloc_elts(&tmpl, desc);
+		ret = rxq_alloc_elts(&tmpl, desc, NULL);
 	if (ret) {
 		DEBUG("%p: RXQ allocation failed: %s",
 		      (void *)dev, strerror(ret));
@@ -2941,10 +3130,6 @@ mlx4_dev_set_mtu(struct rte_eth_dev *dev, uint16_t *mtu)
 	/* Reconfigure each RX queue. */
 	for (i = 0; (i != priv->rxqs_n); ++i) {
 		struct rxq *rxq = (*priv->rxqs)[i];
-		uint16_t desc;
-		unsigned int socket;
-		struct rte_eth_rxconf *conf;
-		struct rte_mempool *mp;
 		unsigned int max_frame_len;
 		int sp;
 
@@ -2955,27 +3140,14 @@ mlx4_dev_set_mtu(struct rte_eth_dev *dev, uint16_t *mtu)
 		max_frame_len = (priv->mtu + ETHER_HDR_LEN +
 				 (ETHER_MAX_VLAN_FRAME_LEN - ETHER_MAX_LEN));
 		sp = (max_frame_len > (rxq->mb_len - RTE_PKTMBUF_HEADROOM));
-		desc = (rxq->elts_n *
-			(rxq->sp ? MLX4_PMD_SGE_WR_N : 1));
-		socket = rxq->socket;
-		conf = NULL; /* Currently unused. */
-		mp = rxq->mp;
-		rxq_cleanup(rxq);
 		/* Provide new values to rxq_setup(). */
 		dev->data->dev_conf.rxmode.jumbo_frame = sp;
 		dev->data->dev_conf.rxmode.max_rx_pkt_len = max_frame_len;
-		if (rxq_setup(dev, rxq, desc, socket, conf, mp)) {
-			/* This queue is now dead, with no way to
-			 * recover. Just prevent mlx4_rx_burst() from
-			 * crashing during the next call by enabling
-			 * SP mode. mlx4_rx_burst_sp() has an
-			 * additional check for this case. */
-			rxq->sp = 1;
-			rx_func = mlx4_rx_burst_sp;
-			if (errno)
-				ret = errno;
-			else
-				ret = ENOBUFS;
+		if ((ret = rxq_rehash(dev, rxq))) {
+			ret = -ret;
+			/* Force SP RX if that queue requires it and abort. */
+			if (rxq->sp)
+				rx_func = mlx4_rx_burst_sp;
 			break;
 		}
 		/* Reenable non-RSS queue attributes. No need to check
@@ -2992,6 +3164,7 @@ mlx4_dev_set_mtu(struct rte_eth_dev *dev, uint16_t *mtu)
 			rx_func = mlx4_rx_burst_sp;
 	}
 	/* Burst functions can now be called again. */
+	rte_wmb();
 	dev->rx_pkt_burst = rx_func;
 out:
 	priv_unlock(priv);
