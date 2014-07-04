@@ -118,7 +118,7 @@ struct rxq_elt_sp {
 struct rxq_elt {
 	struct ibv_recv_wr wr; /* Work Request. */
 	struct ibv_sge sge; /* Scatter/Gather Element. */
-	/* SGE buffer is stored as the work request ID to reduce size. */
+	/* mbuf pointer is stored as (sge.data - (wr.wr_id & 0xffff)). */
 };
 
 /* RX queue descriptor. */
@@ -1358,8 +1358,12 @@ rxq_alloc_elts(struct rxq *rxq, unsigned int elts_n, struct rte_mbuf **pool)
 			ret = ENOMEM;
 			goto error;
 		}
-		/* Configure WR. */
-		wr->wr_id = (uint64_t)buf;
+		/* Configure WR. Work request ID contains its own index in
+		 * the elts array and the offset between SGE buffer header and
+		 * its data. */
+		wr->wr_id = ((i << 16) |
+			     (((uintptr_t)buf->buf_addr +
+			       RTE_PKTMBUF_HEADROOM) - (uintptr_t)buf));
 		wr->next = &(*elts)[(i + 1)].wr;
 		wr->sg_list = sge;
 		wr->num_sge = 1;
@@ -1371,11 +1375,23 @@ rxq_alloc_elts(struct rxq *rxq, unsigned int elts_n, struct rte_mbuf **pool)
 		/* sge->addr must be able to store a pointer. */
 		assert(sizeof(sge->addr) >= sizeof(uintptr_t));
 		/* SGE keeps its headroom. */
-		sge->addr = (uintptr_t)rte_pktmbuf_mtod(buf, char *);
+		sge->addr = (uintptr_t)
+			((uint8_t *)buf->buf_addr + RTE_PKTMBUF_HEADROOM);
 		sge->length = (buf->buf_len - RTE_PKTMBUF_HEADROOM);
 		sge->lkey = rxq->mr->lkey;
 		/* Redundant check for tailroom. */
 		assert(sge->length == rte_pktmbuf_tailroom(buf));
+		/* Make sure elts index and SGE mbuf pointer can be deduced
+		 * from WR ID. */
+		if (((wr->wr_id >> 16) != i) ||
+		    ((void *)(sge->addr - (wr->wr_id & 0xffff)) != buf)) {
+			DEBUG("%p: cannot store index and offset in WR ID",
+			      (void *)rxq);
+			sge->addr = 0;
+			rte_pktmbuf_free(buf);
+			ret = EOVERFLOW;
+			goto error;
+		}
 	}
 	/* The last WR pointer must be NULL. */
 	(*elts)[(i - 1)].wr.next = NULL;
@@ -1390,10 +1406,14 @@ error:
 		assert(pool == NULL);
 		for (i = 0; (i != elemof(*elts)); ++i) {
 			struct rxq_elt *elt = &(*elts)[i];
+			struct rte_mbuf *buf;
 
-			if ((struct rte_mbuf *)elt->wr.wr_id != NULL)
-				rte_pktmbuf_free_seg((struct rte_mbuf *)
-						     elt->wr.wr_id);
+			if (elt->sge.addr == 0)
+				continue;
+			assert((elt->wr.wr_id >> 16) == i);
+			buf = (void *)
+				(elt->sge.addr - (elt->wr.wr_id & 0xffff));
+			rte_pktmbuf_free_seg(buf);
 		}
 		rte_free(elts);
 	}
@@ -1416,10 +1436,13 @@ rxq_free_elts(struct rxq *rxq)
 		return;
 	for (i = 0; (i != elemof(*elts)); ++i) {
 		struct rxq_elt *elt = &(*elts)[i];
+		struct rte_mbuf *buf;
 
-		if ((struct rte_mbuf *)elt->wr.wr_id != NULL)
-			rte_pktmbuf_free_seg((struct rte_mbuf *)
-					     elt->wr.wr_id);
+		if (elt->sge.addr == 0)
+			continue;
+		assert((elt->wr.wr_id >> 16) == i);
+		buf = (void *)(elt->sge.addr - (elt->wr.wr_id & 0xffff));
+		rte_pktmbuf_free_seg(buf);
 	}
 	rte_free(elts);
 }
@@ -2022,13 +2045,17 @@ mlx4_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	/* For each work completion. */
 	for (i = 0; (i != wcs_n); ++i) {
 		struct ibv_wc *wc = &wcs[i];
+		uint64_t wr_id = wc->wr_id;
 		uint32_t len = wc->byte_len;
-		struct rxq_elt *elt = &(*elts)[i];
+		struct rxq_elt *elt = &(*elts)[wr_id >> 16];
 		struct ibv_recv_wr *wr = &elt->wr;
-		struct rte_mbuf *seg = (struct rte_mbuf *)wc->wr_id;
+		struct rte_mbuf *seg =
+			(void *)(elt->sge.addr - (wr_id & 0xffff));
 		struct rte_mbuf *rep;
 
 		/* Sanity checks. */
+		assert((wr_id >> 16) < rxq->elts_n);
+		assert(wr_id == wr->wr_id);
 		assert(wr->sg_list == &elt->sge);
 		assert(wr->num_sge == 1);
 		/* Link completed WRs together for repost. */
@@ -2038,7 +2065,7 @@ mlx4_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			/* Whatever, just repost the offending WR. */
 			DEBUG("rxq=%p, wr_id=%" PRIu64 ": bad work completion"
 			      " status (%d): %s",
-			      (void *)rxq, wc->wr_id, wc->status,
+			      (void *)rxq, wr_id, wc->status,
 			      ibv_wc_status_str(wc->status));
 #ifdef MLX4_PMD_SOFT_COUNTERS
 			/* Increase dropped packets counter. */
@@ -2059,7 +2086,7 @@ mlx4_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			 */
 			DEBUG("rxq=%p, wr_id=%" PRIu64 ":"
 			      " can't allocate a new mbuf",
-			      (void *)rxq, wc->wr_id);
+			      (void *)rxq, wr_id);
 			/* Increase out of memory counters. */
 			++rxq->stats.rx_nombuf;
 			++rxq->priv->dev->data->rx_mbuf_alloc_failed;
@@ -2069,7 +2096,9 @@ mlx4_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		/* Reconfigure sge to use rep instead of seg. */
 		elt->sge.addr = (uintptr_t)rep->buf_addr + RTE_PKTMBUF_HEADROOM;
 		assert(elt->sge.lkey == rxq->mr->lkey);
-		wr->wr_id = (uint64_t)rep;
+		wr->wr_id = ((wr_id & ~0xffff) |
+			     (((uintptr_t)rep->buf_addr +
+			       RTE_PKTMBUF_HEADROOM) - (uintptr_t)rep));
 
 		/* Update seg information. */
 		seg->data_off = RTE_PKTMBUF_HEADROOM;
@@ -2305,9 +2334,11 @@ rxq_rehash(struct rte_eth_dev *dev, struct rxq *rxq)
 
 		for (i = 0; (i != elemof(*elts)); ++i) {
 			struct rxq_elt *elt = &(*elts)[i];
+			struct rte_mbuf *buf = (void *)
+				(elt->sge.addr - (elt->wr.wr_id & 0xffff));
 
-			assert((void *)elt->wr.wr_id != NULL);
-			pool[k++] = (void *)elt->wr.wr_id;
+			assert((elt->wr.wr_id >> 16) == i);
+			pool[k++] = buf;
 		}
         }
 	assert(k == mbuf_n);
