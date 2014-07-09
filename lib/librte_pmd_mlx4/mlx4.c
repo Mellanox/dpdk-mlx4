@@ -56,7 +56,9 @@
 #ifdef PEDANTIC
 #pragma GCC diagnostic ignored "-pedantic"
 #endif
+
 #include <infiniband/verbs.h>
+
 #ifdef PEDANTIC
 #pragma GCC diagnostic error "-pedantic"
 #endif
@@ -174,9 +176,9 @@ struct rxq {
 	 * may contain several specifications, one per configured VLAN ID.
 	 */
 	BITFIELD_DECLARE(mac_configured, uint32_t, MLX4_MAX_MAC_ADDRESSES);
-	struct ibv_flow *mac_flow[MLX4_MAX_MAC_ADDRESSES];
-	struct ibv_flow *promisc_flow; /* Promiscuous flow. */
-	struct ibv_flow *allmulti_flow; /* Multicast flow. */
+	struct ibv_exp_flow *mac_flow[MLX4_MAX_MAC_ADDRESSES];
+	struct ibv_exp_flow *promisc_flow; /* Promiscuous flow. */
+	struct ibv_exp_flow *allmulti_flow; /* Multicast flow. */
 	unsigned int port_id; /* Port ID for incoming packets. */
 	unsigned int elts_n; /* (*elts)[] length. */
 	union {
@@ -1079,7 +1081,7 @@ txq_setup(struct rte_eth_dev *dev, struct txq *txq, uint16_t desc,
 	};
 	union {
 		struct ibv_qp_init_attr init;
-		struct ibv_qp_attr mod;
+		struct ibv_exp_qp_attr mod;
 	} attr;
 	int ret = 0;
 
@@ -1137,14 +1139,14 @@ txq_setup(struct rte_eth_dev *dev, struct txq *txq, uint16_t desc,
 	/* ibv_create_qp() updates this value. */
 	tmpl.max_inline = attr.init.cap.max_inline_data;
 #endif
-	attr.mod = (struct ibv_qp_attr){
+	attr.mod = (struct ibv_exp_qp_attr){
 		/* Move the QP to this state. */
 		.qp_state = IBV_QPS_INIT,
 		/* Primary port number. */
 		.port_num = priv->port
 	};
-	if ((ret = ibv_modify_qp(tmpl.qp, &attr.mod,
-				 (IBV_QP_STATE | IBV_QP_PORT)))) {
+	if ((ret = ibv_exp_modify_qp(tmpl.qp, &attr.mod,
+				 (IBV_EXP_QP_STATE | IBV_EXP_QP_PORT)))) {
 		DEBUG("%p: QP state to IBV_QPS_INIT failed: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
@@ -1154,16 +1156,16 @@ txq_setup(struct rte_eth_dev *dev, struct txq *txq, uint16_t desc,
 		      (void *)dev, strerror(ret));
 		goto error;
 	}
-	attr.mod = (struct ibv_qp_attr){
+	attr.mod = (struct ibv_exp_qp_attr){
 		.qp_state = IBV_QPS_RTR
 	};
-	if ((ret = ibv_modify_qp(tmpl.qp, &attr.mod, IBV_QP_STATE))) {
+	if ((ret = ibv_exp_modify_qp(tmpl.qp, &attr.mod, IBV_EXP_QP_STATE))) {
 		DEBUG("%p: QP state to IBV_QPS_RTR failed: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
 	}
 	attr.mod.qp_state = IBV_QPS_RTS;
-	if ((ret = ibv_modify_qp(tmpl.qp, &attr.mod, IBV_QP_STATE))) {
+	if ((ret = ibv_exp_modify_qp(tmpl.qp, &attr.mod, IBV_EXP_QP_STATE))) {
 		DEBUG("%p: QP state to IBV_QPS_RTS failed: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
@@ -1541,7 +1543,7 @@ rxq_mac_addr_del(struct rxq *rxq, unsigned int mac_index)
 	}
 #endif
 	assert(rxq->mac_flow[mac_index] != NULL);
-	claim_zero(ibv_destroy_flow(rxq->mac_flow[mac_index]));
+	claim_zero(ibv_exp_destroy_flow(rxq->mac_flow[mac_index]));
 	rxq->mac_flow[mac_index] = NULL;
 	BITFIELD_RESET(rxq->mac_configured, mac_index);
 }
@@ -1566,7 +1568,7 @@ rxq_mac_addr_add(struct rxq *rxq, unsigned int mac_index)
 	unsigned int vlans = 0;
 	unsigned int specs = 0;
 	unsigned int i, j;
-	struct ibv_flow *flow;
+	struct ibv_exp_flow *flow;
 
 	assert(mac_index < elemof(priv->mac));
 	if (BITFIELD_ISSET(rxq->mac_configured, mac_index))
@@ -1578,27 +1580,28 @@ rxq_mac_addr_add(struct rxq *rxq, unsigned int mac_index)
 	specs = (vlans ? vlans : 1);
 
 	/* Allocate flow specification on the stack. */
-	struct ibv_flow_attr data[1 +
-				  (sizeof(struct ibv_flow_spec_eth[specs]) /
-				   sizeof(struct ibv_flow_attr)) +
-				  !!(sizeof(struct ibv_flow_spec_eth[specs]) %
-				     sizeof(struct ibv_flow_attr))];
-	struct ibv_flow_attr *attr = (void *)&data[0];
-	struct ibv_flow_spec_eth *spec = (void *)&data[1];
+	struct ibv_exp_flow_attr data[1 +
+				  (sizeof(struct ibv_exp_flow_spec_eth[specs]) /
+				   sizeof(struct ibv_exp_flow_attr)) +
+				  !!(sizeof(struct ibv_exp_flow_spec_eth[specs]) %
+				  sizeof(struct ibv_exp_flow_attr))];
+
+	struct ibv_exp_flow_attr *attr = (void *)&data[0];
+	struct ibv_exp_flow_spec_eth *spec = (void *)&data[1];
 
 	/*
 	 * No padding must be inserted by the compiler between attr and spec.
 	 * This layout is expected by libibverbs.
 	 */
 	assert(((uint8_t *)attr + sizeof(*attr)) == (uint8_t *)spec);
-	*attr = (struct ibv_flow_attr){
-		.type = IBV_FLOW_ATTR_NORMAL,
+	*attr = (struct ibv_exp_flow_attr){
+		.type = IBV_EXP_FLOW_ATTR_NORMAL,
 		.num_of_specs = specs,
 		.port = priv->port,
 		.flags = 0
 	};
-	*spec = (struct ibv_flow_spec_eth){
-		.type = IBV_FLOW_SPEC_ETH,
+	*spec = (struct ibv_exp_flow_spec_eth){
+		.type = IBV_EXP_FLOW_SPEC_ETH,
 		.size = sizeof(*spec),
 		.val = {
 			.dst_mac = {
@@ -1645,7 +1648,7 @@ rxq_mac_addr_add(struct rxq *rxq, unsigned int mac_index)
 #endif
 	/* Create related flow. */
 	errno = 0;
-	if ((flow = ibv_create_flow(rxq->qp, attr)) == NULL) {
+	if ((flow = ibv_exp_create_flow(rxq->qp, attr)) == NULL) {
 		/* It's not clear whether errno is always set in this case. */
 		DEBUG("%p: flow configuration failed, errno=%d: %s",
 		      (void *)rxq, errno,
@@ -1766,9 +1769,9 @@ end:
 static int
 rxq_allmulticast_enable(struct rxq *rxq)
 {
-	struct ibv_flow *flow;
-	struct ibv_flow_attr attr = {
-		.type = IBV_FLOW_ATTR_MC_DEFAULT,
+	struct ibv_exp_flow *flow;
+	struct ibv_exp_flow_attr attr = {
+		.type = IBV_EXP_FLOW_ATTR_MC_DEFAULT,
 		.num_of_specs = 0,
 		.port = rxq->priv->port,
 		.flags = 0
@@ -1785,7 +1788,7 @@ rxq_allmulticast_enable(struct rxq *rxq)
 	if (rxq->allmulti_flow != NULL)
 		return EBUSY;
 	errno = 0;
-	if ((flow = ibv_create_flow(rxq->qp, &attr)) == NULL) {
+	if ((flow = ibv_exp_create_flow(rxq->qp, &attr)) == NULL) {
 		/* It's not clear whether errno is always set in this case. */
 		DEBUG("%p: flow configuration failed, errno=%d: %s",
 		      (void *)rxq, errno,
@@ -1812,7 +1815,7 @@ rxq_allmulticast_disable(struct rxq *rxq)
 	DEBUG("%p: disabling allmulticast mode", (void *)rxq);
 	if (rxq->allmulti_flow == NULL)
 		return;
-	claim_zero(ibv_destroy_flow(rxq->allmulti_flow));
+	claim_zero(ibv_exp_destroy_flow(rxq->allmulti_flow));
 	rxq->allmulti_flow = NULL;
 	DEBUG("%p: allmulticast mode disabled", (void *)rxq);
 }
@@ -1820,15 +1823,15 @@ rxq_allmulticast_disable(struct rxq *rxq)
 static int
 rxq_promiscuous_enable(struct rxq *rxq)
 {
-	struct ibv_flow *flow;
-	struct ibv_flow_attr attr = {
+	struct ibv_exp_flow *flow;
+	struct ibv_exp_flow_attr attr = {
 		/*
-		 * XXX IBV_FLOW_ATTR_ALL_DEFAULT is used in place of
-		 * IBV_FLOW_ATTR_SNIFFER because the latter doesn't work
+		 * XXX IBV_EXP_FLOW_ATTR_ALL_DEFAULT is used in place of
+		 * IBV_EXP_FLOW_ATTR_SNIFFER because the latter doesn't work
 		 * and triggers kernel Oopses in this version:
 		 * mlnx-ofa_kernel-2.0-OFED.2.0.0.2.1.ga62cf7e
 		 */
-		.type = IBV_FLOW_ATTR_ALL_DEFAULT,
+		.type = IBV_EXP_FLOW_ATTR_ALL_DEFAULT,
 		.num_of_specs = 0,
 		.port = rxq->priv->port,
 		.flags = 0
@@ -1845,7 +1848,7 @@ rxq_promiscuous_enable(struct rxq *rxq)
 	if (rxq->promisc_flow != NULL)
 		return EBUSY;
 	errno = 0;
-	if ((flow = ibv_create_flow(rxq->qp, &attr)) == NULL) {
+	if ((flow = ibv_exp_create_flow(rxq->qp, &attr)) == NULL) {
 		/* It's not clear whether errno is always set in this case. */
 		DEBUG("%p: flow configuration failed, errno=%d: %s",
 		      (void *)rxq, errno,
@@ -1872,7 +1875,7 @@ rxq_promiscuous_disable(struct rxq *rxq)
 	DEBUG("%p: disabling promiscuous mode", (void *)rxq);
 	if (rxq->promisc_flow == NULL)
 		return;
-	claim_zero(ibv_destroy_flow(rxq->promisc_flow));
+	claim_zero(ibv_exp_destroy_flow(rxq->promisc_flow));
 	rxq->promisc_flow = NULL;
 	DEBUG("%p: promiscuous mode disabled", (void *)rxq);
 }
@@ -2259,14 +2262,14 @@ rxq_setup_qp_rss(struct priv *priv, struct ibv_cq *cq, uint16_t desc,
 	};
 
 	if (parent) {
-		attr.qpg.qpg_type = IBV_QPG_PARENT;
+		attr.qpg.qpg_type = IBV_EXP_QPG_PARENT;
 		/* TSS isn't necessary. */
 		attr.qpg.parent_attrib.tss_child_count = 0;
 		attr.qpg.parent_attrib.rss_child_count = priv->rxqs_n;
 		DEBUG("initializing parent RSS queue");
 	}
 	else {
-		attr.qpg.qpg_type = IBV_QPG_CHILD_RX;
+		attr.qpg.qpg_type = IBV_EXP_QPG_CHILD_RX;
 		attr.qpg.qpg_parent = priv->rxq_parent.qp;
 		DEBUG("initializing child RSS queue");
 	}
@@ -2462,7 +2465,7 @@ rxq_setup(struct rte_eth_dev *dev, struct rxq *rxq, uint16_t desc,
 		.mp = mp,
 		.socket = socket
 	};
-	struct ibv_qp_attr mod;
+	struct ibv_exp_qp_attr mod;
 	struct ibv_recv_wr *bad_wr;
 	struct rte_mbuf *buf;
 	int ret = 0;
@@ -2541,18 +2544,18 @@ skip_mr:
 		      (void *)dev, strerror(ret));
 		goto error;
 	}
-	mod = (struct ibv_qp_attr){
+	mod = (struct ibv_exp_qp_attr){
 		/* Move the QP to this state. */
 		.qp_state = IBV_QPS_INIT,
 		/* Primary port number. */
 		.port_num = priv->port
 	};
-	if ((ret = ibv_modify_qp(tmpl.qp, &mod,
-				 (IBV_QP_STATE |
+	if ((ret = ibv_exp_modify_qp(tmpl.qp, &mod,
+				     (IBV_EXP_QP_STATE |
 #if RSS_SUPPORT
-				  (parent ? IBV_QP_GROUP_RSS : 0) |
+				      (parent ? IBV_EXP_QP_GROUP_RSS : 0) |
 #endif /* RSS_SUPPORT */
-				  IBV_QP_PORT)))) {
+				      IBV_EXP_QP_PORT)))) {
 		DEBUG("%p: QP state to IBV_QPS_INIT failed: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
@@ -2589,10 +2592,10 @@ skip_mr:
 		goto error;
 	}
 skip_alloc:
-	mod = (struct ibv_qp_attr){
+	mod = (struct ibv_exp_qp_attr){
 		.qp_state = IBV_QPS_RTR
 	};
-	if ((ret = ibv_modify_qp(tmpl.qp, &mod, IBV_QP_STATE))) {
+	if ((ret = ibv_exp_modify_qp(tmpl.qp, &mod, IBV_EXP_QP_STATE))) {
 		DEBUG("%p: QP state to IBV_QPS_RTR failed: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
@@ -3675,7 +3678,7 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		struct rte_eth_dev *eth_dev;
 #if RSS_SUPPORT
 		struct ibv_exp_device_attr exp_device_attr = {
-			.comp_mask = (IBV_EXP_DEVICE_ATTR_FLAGS2 |
+			.comp_mask = (IBV_EXP_DEVICE_ATTR_EXP_CAP_FLAGS |
 				      IBV_EXP_DEVICE_ATTR_RSS_TBL_SZ)
 		};
 #endif /* RSS_SUPPORT */
@@ -3729,8 +3732,8 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 			DEBUG("experimental ibv_exp_query_device");
 			goto port_error;
 		}
-		if ((exp_device_attr.device_cap_flags2 & IBV_EXP_DEVICE_QPG) &&
-		    (exp_device_attr.device_cap_flags2 & IBV_EXP_DEVICE_UD_RSS) &&
+		if ((exp_device_attr.exp_device_cap_flags & IBV_EXP_DEVICE_QPG) &&
+		    (exp_device_attr.exp_device_cap_flags & IBV_EXP_DEVICE_UD_RSS) &&
 		    (exp_device_attr.comp_mask & IBV_EXP_DEVICE_ATTR_RSS_TBL_SZ) &&
 		    (exp_device_attr.max_rss_tbl_sz > 0)) {
 			priv->hw_qpg = 1;
@@ -3742,7 +3745,7 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 			priv->hw_rss = 0;
 			priv->max_rss_tbl_sz = 0;
 		}
-		priv->hw_tss = !!(exp_device_attr.device_cap_flags2 &
+		priv->hw_tss = !!(exp_device_attr.exp_device_cap_flags &
 				  IBV_EXP_DEVICE_UD_TSS);
 		DEBUG("device flags: %s%s%s",
 		      (priv->hw_qpg ? "IBV_DEVICE_QPG " : ""),
