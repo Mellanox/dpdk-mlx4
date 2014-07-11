@@ -63,6 +63,28 @@ config.h: comp_check.sh
 	CC="$(CC)" CFLAGS="$(CFLAGS)" sh -- $< \
 		$@ SEND_RAW_WR_SUPPORT \
 		infiniband/verbs.h type 'struct ibv_send_wr_raw'
+	CC="$(CC)" \
+		CFLAGS="$(CFLAGS) \
+			-DRTE_MAX_LCORE=64 \
+			-DRTE_PKTMBUF_HEADROOM=128" sh -- $< \
+		$@ HAVE_STRUCT_RTE_PKTMBUF \
+		rte_mbuf.h type 'struct rte_pktmbuf'
+	CC="$(CC)" \
+		CFLAGS="$(CFLAGS) \
+			-DRTE_MAX_LCORE=64 \
+			-DRTE_PKTMBUF_HEADROOM=128 \
+			-DRTE_ETHDEV_QUEUE_STAT_CNTRS=2 \
+			-DRTE_LOG_LEVEL=0" sh -- $< \
+		$@ HAVE_MTU_GET \
+		rte_ethdev.h type mtu_get_t
+	CC="$(CC)" \
+		CFLAGS="$(CFLAGS) \
+			-DRTE_MAX_LCORE=64 \
+			-DRTE_PKTMBUF_HEADROOM=128 \
+			-DRTE_ETHDEV_QUEUE_STAT_CNTRS=2 \
+			-DRTE_LOG_LEVEL=0" sh -- $< \
+		$@ HAVE_MTU_SET \
+		rte_ethdev.h type mtu_set_t
 
 $(OBJ): $(SRC) $(HDR) config.h
 

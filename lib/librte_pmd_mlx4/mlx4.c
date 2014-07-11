@@ -46,6 +46,7 @@
 #include <rte_malloc.h>
 #include <rte_spinlock.h>
 #include <rte_atomic.h>
+#include <rte_version.h>
 #ifdef PEDANTIC
 #pragma GCC diagnostic error "-pedantic"
 #endif
@@ -68,6 +69,25 @@
 
 #ifndef MLX4_PMD_SOFT_COUNTERS
 #error Hardware counters not implemented, MLX4_PMD_SOFT_COUNTERS is required.
+#endif
+
+/* Whether the old mbuf API should be used. */
+#ifdef HAVE_STRUCT_RTE_PKTMBUF
+#define NEXT(m) (m)->pkt.next
+#define DATA_LEN(m) (m)->pkt.data_len
+#define PKT_LEN(m) (m)->pkt.pkt_len
+#define DATA_OFF(m) ((uint8_t *)(m)->pkt.data - (uint8_t *)(m)->buf_addr)
+#define SET_DATA_OFF(m, o) ((m)->pkt.data = ((uint8_t *)(m)->buf_addr + (o)))
+#define NB_SEGS(m) (m)->pkt.nb_segs
+#define IN_PORT(m) (m)->pkt.in_port
+#else
+#define NEXT(m) (m)->next
+#define DATA_LEN(m) (m)->data_len
+#define PKT_LEN(m) (m)->pkt_len
+#define DATA_OFF(m) (m)->data_off
+#define SET_DATA_OFF(m, o) ((m)->data_off = (o))
+#define NB_SEGS(m) (m)->nb_segs
+#define IN_PORT(m) (m)->in_port
 #endif
 
 /* If raw send operations are available, use them since they are faster. */
@@ -734,7 +754,7 @@ txq_complete(struct txq *txq)
 				(*bufs)[j] = NULL;
 #ifndef NDEBUG
 				/* Make sure this segment is unlinked. */
-				buf->next = NULL;
+				NEXT(buf) = NULL;
 				/* SGE poisoning shouldn't hurt. */
 				memset(&elt_wr->sges[j], 0x44,
 				       sizeof(elt_wr->sges[j]));
@@ -870,7 +890,7 @@ mlx4_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		/* Register each segment as SGEs. */
 		for (buf = pkts[i];
 		     ((buf != NULL) && (seg_n != elemof(elt_wr->sges)));
-		     buf = buf->next) {
+		     buf = NEXT(buf)) {
 			struct ibv_sge *sge = &elt_wr->sges[seg_n];
 			uint32_t lkey;
 
@@ -882,7 +902,7 @@ mlx4_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 				break;
 			}
 			/* Ignore empty segments (except the first one). */
-			if (unlikely((buf->data_len == 0) &&
+			if (unlikely((DATA_LEN(buf) == 0) &&
 				     (buf != pkts[i])))
 				continue;
 			/* Update SGE. */
@@ -890,7 +910,7 @@ mlx4_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			sge->addr = (uintptr_t)rte_pktmbuf_mtod(buf, char *);
 			if (txq->priv->vf)
 				rte_prefetch0((volatile void *)sge->addr);
-			sge->length = buf->data_len;
+			sge->length = DATA_LEN(buf);
 			sge->lkey = lkey;
 			sent_size += sge->length;
 			/* sent_size may be unused, silence warning. */
@@ -983,7 +1003,7 @@ mlx4_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		while (1) {
 			--txq->stats.opackets;
 			assert(bad_elt_buf->bufs[0] != NULL);
-			txq->stats.obytes -= bad_elt_buf->bufs[0]->pkt_len;
+			txq->stats.obytes -= PKT_LEN(bad_elt_buf->bufs[0]);
 			if (bad_elt_wr->wr.next == NULL)
 				break;
 			bad_elt_wr = containerof(bad_elt_wr->wr.next,
@@ -1244,7 +1264,7 @@ rxq_alloc_elts_sp(struct rxq *rxq, unsigned int elts_n,
 			}
 			elt->bufs[j] = buf;
 			/* Headroom is reserved by rte_pktmbuf_alloc(). */
-			assert(buf->data_off == RTE_PKTMBUF_HEADROOM);
+			assert(DATA_OFF(buf) == RTE_PKTMBUF_HEADROOM);
 			/* Buffer is supposed to be empty. */
 			assert(rte_pktmbuf_data_len(buf) == 0);
 			assert(rte_pktmbuf_pkt_len(buf) == 0);
@@ -1259,8 +1279,8 @@ rxq_alloc_elts_sp(struct rxq *rxq, unsigned int elts_n,
 			}
 			else {
 				/* Subsequent SGEs lose theirs. */
-				assert(buf->data_off == RTE_PKTMBUF_HEADROOM);
-				buf->data_off = 0;
+				assert(DATA_OFF(buf) == RTE_PKTMBUF_HEADROOM);
+				SET_DATA_OFF(buf, 0);
 				sge->addr = (uintptr_t)buf->buf_addr;
 				sge->length = buf->buf_len;
 			}
@@ -1368,7 +1388,7 @@ rxq_alloc_elts(struct rxq *rxq, unsigned int elts_n, struct rte_mbuf **pool)
 		wr->sg_list = sge;
 		wr->num_sge = 1;
 		/* Headroom is reserved by rte_pktmbuf_alloc(). */
-		assert(buf->data_off == RTE_PKTMBUF_HEADROOM);
+		assert(DATA_OFF(buf) == RTE_PKTMBUF_HEADROOM);
 		/* Buffer is supposed to be empty. */
 		assert(rte_pktmbuf_data_len(buf) == 0);
 		assert(rte_pktmbuf_pkt_len(buf) == 0);
@@ -1929,13 +1949,13 @@ mlx4_rx_burst_sp(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			}
 #ifndef NDEBUG
 			/* Poison user-modifiable fields in rep. */
-			rep->next = (void *)((uintptr_t)-1);
-			rep->data_off = 0xdead;
-			rep->data_len = 0xd00d;
-			rep->pkt_len = 0xdeadd00d;
-			rep->nb_segs = 0x2a;
-			rep->in_port = 0x2a;
-			rep->ol_flags = 0xffffffff;
+			NEXT(rep) = (void *)((uintptr_t)-1);
+			SET_DATA_OFF(rep, 0xdead);
+			DATA_LEN(rep) = 0xd00d;
+			PKT_LEN(rep) = 0xdeadd00d;
+			NB_SEGS(rep) = 0x2a;
+			IN_PORT(rep) = 0x2a;
+			rep->ol_flags = -1;
 #endif
 			assert(rep->buf_len == seg->buf_len);
 			assert(rep->buf_len == rxq->mb_len);
@@ -1947,15 +1967,15 @@ mlx4_rx_burst_sp(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			/* Update pkt_buf if it's the first segment, or link
 			 * seg to the previous one and update pkt_buf_next. */
 			*pkt_buf_next = seg;
-			pkt_buf_next = &seg->next;
+			pkt_buf_next = &NEXT(seg);
 			/* Update seg information. */
 			seg_tailroom = (seg->buf_len - seg_headroom);
 			assert(sge->length == seg_tailroom);
-			seg->data_off = seg_headroom;
+			SET_DATA_OFF(seg, seg_headroom);
 			if (likely(len <= seg_tailroom)) {
 				/* Last segment. */
-				seg->data_len = len;
-				seg->pkt_len = len;
+				DATA_LEN(seg) = len;
+				PKT_LEN(seg) = len;
 				/* Sanity check. */
 				assert(rte_pktmbuf_headroom(seg) ==
 				       seg_headroom);
@@ -1963,8 +1983,8 @@ mlx4_rx_burst_sp(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 				       (seg_tailroom - len));
 				break;
 			}
-			seg->data_len = seg_tailroom;
-			seg->pkt_len = seg_tailroom;
+			DATA_LEN(seg) = seg_tailroom;
+			PKT_LEN(seg) = seg_tailroom;
 			/* Sanity check. */
 			assert(rte_pktmbuf_headroom(seg) == seg_headroom);
 			assert(rte_pktmbuf_tailroom(seg) == 0);
@@ -1976,9 +1996,9 @@ mlx4_rx_burst_sp(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		*pkt_buf_next = NULL;
 		assert(pkt_buf != NULL);
 		assert(j != 0);
-		pkt_buf->nb_segs = j;
-		pkt_buf->in_port = rxq->port_id;
-		pkt_buf->pkt_len = wc->byte_len;
+		NB_SEGS(pkt_buf) = j;
+		IN_PORT(pkt_buf) = rxq->port_id;
+		PKT_LEN(pkt_buf) = wc->byte_len;
 		pkt_buf->ol_flags = 0;
 
 		/* Return packet. */
@@ -2101,12 +2121,12 @@ mlx4_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			       RTE_PKTMBUF_HEADROOM) - (uintptr_t)rep));
 
 		/* Update seg information. */
-		seg->data_off = RTE_PKTMBUF_HEADROOM;
-		seg->nb_segs = 1;
-		seg->in_port = rxq->port_id;
-		seg->next = NULL;
-		seg->pkt_len = len;
-		seg->data_len = len;
+		SET_DATA_OFF(seg, RTE_PKTMBUF_HEADROOM);
+		NB_SEGS(seg) = 1;
+		IN_PORT(seg) = rxq->port_id;
+		NEXT(seg) = NULL;
+		PKT_LEN(seg) = len;
+		DATA_LEN(seg) = len;
 		seg->ol_flags = 0;
 
 		/* Return packet. */
@@ -3107,6 +3127,8 @@ mlx4_link_update(struct rte_eth_dev *dev, int wait_to_complete)
 	return ret;
 }
 
+#ifdef HAVE_MTU_GET
+
 static int
 mlx4_dev_get_mtu(struct rte_eth_dev *dev, uint16_t *mtu)
 {
@@ -3125,14 +3147,26 @@ out:
 	return ret;
 }
 
+#endif /* HAVE_MTU_GET */
+
+/* Manage transition from 1.6.0.1 to 1.7.0 MTU API. */
+#if defined(HAVE_MTU_SET) && !defined(HAVE_MTU_GET)
+typedef uint16_t mtu_t;
+#define IN_MTU_GET(mtu) (mtu)
+#else
+typedef uint16_t *mtu_t;
+#define IN_MTU_GET(mtu) *(mtu)
+#endif
+
 /* Setting the MTU affects hardware MRU (packets larger than the MTU cannot be
  * received). Use this as a hint to enable/disable scattered packets support
  * and improve performance when not needed.
  * Since failure is not an option, reconfiguring queues on the fly is not
  * recommended. */
 static int
-mlx4_dev_set_mtu(struct rte_eth_dev *dev, uint16_t *mtu)
+mlx4_dev_set_mtu(struct rte_eth_dev *dev, mtu_t in_mtu)
 {
+	uint16_t mtu = IN_MTU_GET(in_mtu);
 	struct priv *priv = dev->data->dev_private;
 	int ret = 0;
 	unsigned int i;
@@ -3141,16 +3175,15 @@ mlx4_dev_set_mtu(struct rte_eth_dev *dev, uint16_t *mtu)
 
 	priv_lock(priv);
 	/* Set kernel interface MTU first. */
-	if (priv_set_mtu(priv, *mtu)) {
+	if (priv_set_mtu(priv, mtu)) {
 		ret = errno;
-		DEBUG("cannot set port %u MTU to %u: %s", priv->port, *mtu,
+		DEBUG("cannot set port %u MTU to %u: %s", priv->port, mtu,
 		      strerror(errno));
-		*mtu = priv->mtu;
 		goto out;
 	}
 	else
-		DEBUG("adapter port %u MTU set to %u", priv->port, *mtu);
-	priv->mtu = *mtu;
+		DEBUG("adapter port %u MTU set to %u", priv->port, mtu);
+	priv->mtu = mtu;
 	/* Temporarily replace RX handler with a fake one, assuming it has not
 	 * been copied elsewhere. */
 	dev->rx_pkt_burst = removed_rx_burst;
@@ -3392,7 +3425,9 @@ static struct eth_dev_ops mlx4_dev_ops = {
 	.priority_flow_ctrl_set = NULL,
 	.mac_addr_remove = mlx4_mac_addr_remove,
 	.mac_addr_add = mlx4_mac_addr_add,
+#ifdef HAVE_MTU_GET
 	.mtu_get = mlx4_dev_get_mtu,
+#endif
 	.mtu_set = mlx4_dev_set_mtu,
 	.fdir_add_signature_filter = NULL,
 	.fdir_update_signature_filter = NULL,
@@ -3686,7 +3721,17 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		DEBUG("port %u MTU is %u", priv->port, priv->mtu);
 
 		/* from rte_ethdev.c */
+#if RTE_VERSION >= RTE_VERSION_NUM(1, 7, 0, 0)
+		{
+			char name[RTE_ETH_NAME_MAX_LEN];
+
+			snprintf(name, sizeof(name), "%s port %u",
+				 ibv_get_device_name(ibv_dev), port);
+			eth_dev = rte_eth_dev_allocate(name);
+		}
+#else
 		eth_dev = rte_eth_dev_allocate();
+#endif
 		if (eth_dev == NULL) {
 			DEBUG("can not allocate rte ethdev");
 			errno = ENOMEM;
@@ -3697,7 +3742,11 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		eth_dev->pci_dev = pci_dev;
 		eth_dev->driver = &mlx4_driver;
 		eth_dev->data->rx_mbuf_alloc_failed = 0;
+#if RTE_VERSION >= RTE_VERSION_NUM(1, 7, 0, 0)
+		eth_dev->data->mtu = ETHER_MTU;
+#else
 		eth_dev->data->max_frame_size = ETHER_MAX_LEN;
+#endif
 
 		priv->dev = eth_dev;
 		eth_dev->dev_ops = &mlx4_dev_ops;
