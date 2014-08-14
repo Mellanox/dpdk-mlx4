@@ -67,10 +67,6 @@
 /* PMD header. */
 #include "mlx4.h"
 
-#ifndef MLX4_PMD_SOFT_COUNTERS
-#error Hardware counters not implemented, MLX4_PMD_SOFT_COUNTERS is required.
-#endif
-
 /* Whether the old mbuf API should be used. */
 #ifdef HAVE_STRUCT_RTE_PKTMBUF
 #define NEXT(m) (m)->pkt.next
@@ -121,16 +117,20 @@ typedef struct ibv_send_wr mlx4_send_wr_t;
 
 struct mlx4_rxq_stats {
 	unsigned int idx; /**< Mapping index. */
+#ifdef MLX4_PMD_SOFT_COUNTERS
 	uint64_t ipackets;  /**< Total of successfully received packets. */
 	uint64_t ibytes;    /**< Total of successfully received bytes. */
+#endif
 	uint64_t idropped;  /**< Total of packets dropped when RX ring full. */
 	uint64_t rx_nombuf; /**< Total of RX mbuf allocation failures. */
 };
 
 struct mlx4_txq_stats {
 	unsigned int idx; /**< Mapping index. */
+#ifdef MLX4_PMD_SOFT_COUNTERS
 	uint64_t opackets; /**< Total of successfully sent packets. */
 	uint64_t obytes;   /**< Total of successfully sent bytes. */
+#endif
 	uint64_t odropped; /**< Total of packets not sent when TX ring full. */
 };
 
@@ -2893,13 +2893,17 @@ mlx4_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 			continue;
 		idx = rxq->stats.idx;
 		if (idx < RTE_ETHDEV_QUEUE_STAT_CNTRS) {
+#ifdef MLX4_PMD_SOFT_COUNTERS
 			tmp.q_ipackets[idx] += rxq->stats.ipackets;
 			tmp.q_ibytes[idx] += rxq->stats.ibytes;
+#endif
 			tmp.q_errors[idx] += (rxq->stats.idropped +
 					      rxq->stats.rx_nombuf);
 		}
+#ifdef MLX4_PMD_SOFT_COUNTERS
 		tmp.ipackets += rxq->stats.ipackets;
 		tmp.ibytes += rxq->stats.ibytes;
+#endif
 		tmp.ierrors += rxq->stats.idropped;
 		tmp.rx_nombuf += rxq->stats.rx_nombuf;
 	}
@@ -2910,12 +2914,16 @@ mlx4_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 			continue;
 		idx = txq->stats.idx;
 		if (idx < RTE_ETHDEV_QUEUE_STAT_CNTRS) {
+#ifdef MLX4_PMD_SOFT_COUNTERS
 			tmp.q_opackets[idx] += txq->stats.opackets;
 			tmp.q_obytes[idx] += txq->stats.obytes;
+#endif
 			tmp.q_errors[idx] += txq->stats.odropped;
 		}
+#ifdef MLX4_PMD_SOFT_COUNTERS
 		tmp.opackets += txq->stats.opackets;
 		tmp.obytes += txq->stats.obytes;
+#endif
 		tmp.oerrors += txq->stats.odropped;
 	}
 #ifndef MLX4_PMD_SOFT_COUNTERS
