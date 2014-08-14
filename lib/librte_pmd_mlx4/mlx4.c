@@ -196,6 +196,9 @@ struct txq_elt {
 	/* mbuf pointer is derived from WR_ID(wr.wr_id).offset. */
 };
 
+/* Linear buffer type. Hardware cannot manage larger packets. */
+typedef uint8_t linear_t[16384];
+
 /* TX queue descriptor. */
 struct txq {
 	struct priv *priv; /* Back pointer to private data. */
@@ -216,6 +219,8 @@ struct txq {
 	unsigned int elts_tail; /* First element awaiting completion. */
 	unsigned int elts_comp; /* Number of completion requests. */
 	struct mlx4_txq_stats stats; /* TX queue counters. */
+	linear_t (*elts_linear)[]; /* Linearized buffers. */
+	struct ibv_mr *mr_linear; /* Memory Region for linearized buffers. */
 	unsigned int socket; /* CPU socket ID for allocations. */
 };
 
@@ -564,11 +569,23 @@ txq_alloc_elts(struct txq *txq, unsigned int elts_n)
 	unsigned int i;
 	struct txq_elt (*elts)[elts_n] =
 		rte_calloc_socket("TXQ", 1, sizeof(*elts), 0, txq->socket);
+	linear_t (*elts_linear)[elts_n] =
+		rte_calloc_socket("TXQ", 1, sizeof(*elts_linear), 0,
+				  txq->socket);
+	struct ibv_mr *mr_linear = NULL;
 	int ret = 0;
 
-	if (elts == NULL) {
+	if ((elts == NULL) || (elts_linear == NULL)) {
 		DEBUG("%p: can't allocate packets array", (void *)txq);
 		ret = ENOMEM;
+		goto error;
+	}
+	mr_linear =
+		ibv_reg_mr(txq->priv->pd, elts_linear, sizeof(*elts_linear),
+			   (IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE));
+	if (mr_linear == NULL) {
+		DEBUG("%p: unable to configure MR, ibv_reg_mr() failed",
+		      (void *)txq);
 		goto error;
 	}
 	for (i = 0; (i != elts_n); ++i) {
@@ -588,9 +605,15 @@ txq_alloc_elts(struct txq *txq, unsigned int elts_n)
 	txq->elts_head = 0;
 	txq->elts_tail = 0;
 	txq->elts_comp = 0;
+	txq->elts_linear = elts_linear;
+	txq->mr_linear = mr_linear;
 	assert(ret == 0);
 	return 0;
 error:
+	if (mr_linear != NULL)
+		claim_zero(ibv_dereg_mr(mr_linear));
+	if (elts_linear != NULL)
+		rte_free(elts_linear);
 	if (elts != NULL)
 		rte_free(elts);
 	DEBUG("%p: failed, freed everything", (void *)txq);
@@ -604,10 +627,18 @@ txq_free_elts(struct txq *txq)
 	unsigned int i;
 	unsigned int elts_n = txq->elts_n;
 	struct txq_elt (*elts)[elts_n] = txq->elts;
+	linear_t (*elts_linear)[elts_n] = txq->elts_linear;
+	struct ibv_mr *mr_linear = txq->mr_linear;
 
 	DEBUG("%p: freeing WRs", (void *)txq);
 	txq->elts_n = 0;
 	txq->elts = NULL;
+	txq->elts_linear = NULL;
+	txq->mr_linear = NULL;
+	if (mr_linear != NULL)
+		claim_zero(ibv_dereg_mr(mr_linear));
+	if (elts_linear != NULL)
+		rte_free(elts_linear);
 	if (elts == NULL)
 		return;
 	for (i = 0; (i != elemof(*elts)); ++i) {
@@ -746,6 +777,28 @@ txq_mp2mr(struct txq *txq, struct rte_mempool *mp)
 	return txq->mp2mr[i].lkey;
 }
 
+static unsigned int
+linearize_mbuf(linear_t *linear, struct rte_mbuf *buf)
+{
+	unsigned int size = 0;
+	unsigned int offset;
+
+	do {
+		unsigned int len = DATA_LEN(buf);
+
+		offset = size;
+		size += len;
+		if (unlikely(size > sizeof(*linear)))
+			return 0;
+		memcpy(&(*linear)[offset],
+		       rte_pktmbuf_mtod(buf, uint8_t *),
+		       len);
+		buf = NEXT(buf);
+	}
+	while (buf != NULL);
+	return size;
+}
+
 static uint16_t
 mlx4_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 {
@@ -781,6 +834,7 @@ mlx4_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		unsigned int sent_size = 0;
 #endif
 		unsigned int j;
+		int linearize = 0;
 
 		/* Clean up old buffer. */
 		if (likely(WR_ID(wr->wr_id).offset != 0)) {
@@ -795,18 +849,18 @@ mlx4_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 				tmp = next;
 			}
 			while (tmp != NULL);
-#ifndef NDEBUG
-			/* For assert(). */
-			WR_ID(wr->wr_id).offset = 0;
-			for (j = 0; ((int)j < wr->num_sge); ++j) {
-				elt->sges[j].addr = 0;
-				elt->sges[j].length = 0;
-				elt->sges[j].lkey = 0;
-			}
-			wr->next = NULL;
-			wr->num_sge = 0;
-#endif
 		}
+#ifndef NDEBUG
+		/* For assert(). */
+		WR_ID(wr->wr_id).offset = 0;
+		for (j = 0; ((int)j < wr->num_sge); ++j) {
+			elt->sges[j].addr = 0;
+			elt->sges[j].length = 0;
+			elt->sges[j].lkey = 0;
+		}
+		wr->next = NULL;
+		wr->num_sge = 0;
+#endif
 		/* Sanity checks, most of which are only relevant with
 		 * debugging enabled. */
 		assert(WR_ID(wr->wr_id).id == elts_head);
@@ -815,12 +869,11 @@ mlx4_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		assert(wr->sg_list == &elt->sges[0]);
 		assert(wr->num_sge == 0);
 		assert(wr->opcode == IBV_WR_SEND);
+		/* When there are too many segments, extra segments are
+		 * linearized in the last SGE. */
 		if (unlikely(segs > elemof(elt->sges))) {
-			/* Invalid packet. */
-			DEBUG("%p: too many segments for packet"
-			      " (%u, maximum is %zu)",
-			      (void *)txq, segs, elemof(elt->sges));
-			goto stop;
+			segs = (elemof(elt->sges) - 1);
+			linearize = 1;
 		}
 		/* Set WR fields. */
 		assert(((uintptr_t)rte_pktmbuf_mtod(buf, char *) -
@@ -851,6 +904,7 @@ mlx4_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 					sge->length = 0;
 					sge->lkey = 0;
 				}
+				wr->num_sge = 0;
 #endif
 				goto stop;
 			}
@@ -870,9 +924,63 @@ mlx4_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 #endif
 			buf = NEXT(buf);
 		}
-		/* If buf is not NULL here, nb_segs is not valid. */
+		/* If buf is not NULL here and is not going to be linearized,
+		 * nb_segs is not valid. */
 		assert(j == segs);
-		assert(buf == NULL);
+		assert((buf == NULL) || (linearize));
+		/* Linearize extra segments. */
+		if (linearize) {
+			struct ibv_sge *sge = &elt->sges[segs];
+			linear_t *linear = &(*txq->elts_linear)[elts_head];
+			unsigned int size = linearize_mbuf(linear, buf);
+
+			assert(segs == (elemof(elt->sges) - 1));
+			if (size == 0) {
+				/* Invalid packet. */
+				DEBUG("%p: packet too large to be linearized.",
+				      (void *)txq);
+				/* Clean up TX element. */
+				WR_ID(elt->wr.wr_id).offset = 0;
+#ifndef NDEBUG
+				/* For assert(). */
+				while (j) {
+					--j;
+					--sge;
+					sge->addr = 0;
+					sge->length = 0;
+					sge->lkey = 0;
+				}
+				wr->num_sge = 0;
+#endif
+				goto stop;
+			}
+			/* If MLX4_PMD_SGE_WR_N is 1, free mbuf immediately
+			 * and clear offset from WR ID. */
+			if (elemof(elt->sges) == 1) {
+				do {
+					struct rte_mbuf *next = NEXT(buf);
+
+					rte_pktmbuf_free_seg(buf);
+					buf = next;
+				}
+				while (buf != NULL);
+				WR_ID(wr->wr_id).offset = 0;
+			}
+			/* Set WR fields and fill SGE with linear buffer. */
+			++wr->num_sge;
+			/* Sanity checks, only relevant with debugging
+			 * enabled. */
+			assert(sge->addr == 0);
+			assert(sge->length == 0);
+			assert(sge->lkey == 0);
+			/* Update SGE. */
+			sge->addr = (uintptr_t)&(*linear)[0];
+			sge->length = size;
+			sge->lkey = txq->mr_linear->lkey;
+#if (MLX4_PMD_MAX_INLINE > 0) || defined(MLX4_PMD_SOFT_COUNTERS)
+			sent_size += size;
+#endif
+		}
 		/* Link WRs together for ibv_post_send(). */
 		*wr_next = wr;
 		wr_next = &wr->next;
