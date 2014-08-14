@@ -90,6 +90,26 @@
 #define IN_PORT(m) (m)->in_port
 #endif
 
+/* Work Request ID data type (64 bit). */
+typedef union {
+	struct {
+		uint32_t id;
+		uint16_t offset;
+	} data;
+	uint64_t raw;
+} wr_id_t;
+
+#define WR_ID(o) ((wr_id_t *)&(o))->data
+
+/* Compile-time check. */
+static inline void wr_id_t_check(void)
+{
+	wr_id_t check[1 + (2 * -!(sizeof(wr_id_t) == sizeof(uint64_t)))];
+
+	(void)check;
+	(void)wr_id_t_check;
+}
+
 /* If raw send operations are available, use them since they are faster. */
 #ifdef SEND_RAW_WR_SUPPORT
 typedef struct ibv_send_wr_raw mlx4_send_wr_t;
@@ -138,7 +158,7 @@ struct rxq_elt_sp {
 struct rxq_elt {
 	struct ibv_recv_wr wr; /* Work Request. */
 	struct ibv_sge sge; /* Scatter/Gather Element. */
-	/* mbuf pointer is stored as (sge.data - (wr.wr_id & 0xffff)). */
+	/* mbuf pointer is derived from WR_ID(wr.wr_id).offset. */
 };
 
 /* RX queue descriptor. */
@@ -1381,9 +1401,10 @@ rxq_alloc_elts(struct rxq *rxq, unsigned int elts_n, struct rte_mbuf **pool)
 		/* Configure WR. Work request ID contains its own index in
 		 * the elts array and the offset between SGE buffer header and
 		 * its data. */
-		wr->wr_id = ((i << 16) |
-			     (((uintptr_t)buf->buf_addr +
-			       RTE_PKTMBUF_HEADROOM) - (uintptr_t)buf));
+		WR_ID(wr->wr_id).id = i;
+		WR_ID(wr->wr_id).offset =
+			(((uintptr_t)buf->buf_addr + RTE_PKTMBUF_HEADROOM) -
+			 (uintptr_t)buf);
 		wr->next = &(*elts)[(i + 1)].wr;
 		wr->sg_list = sge;
 		wr->num_sge = 1;
@@ -1403,8 +1424,8 @@ rxq_alloc_elts(struct rxq *rxq, unsigned int elts_n, struct rte_mbuf **pool)
 		assert(sge->length == rte_pktmbuf_tailroom(buf));
 		/* Make sure elts index and SGE mbuf pointer can be deduced
 		 * from WR ID. */
-		if (((wr->wr_id >> 16) != i) ||
-		    ((void *)(sge->addr - (wr->wr_id & 0xffff)) != buf)) {
+		if ((WR_ID(wr->wr_id).id != i) ||
+		    ((void *)(sge->addr - WR_ID(wr->wr_id).offset) != buf)) {
 			DEBUG("%p: cannot store index and offset in WR ID",
 			      (void *)rxq);
 			sge->addr = 0;
@@ -1430,9 +1451,9 @@ error:
 
 			if (elt->sge.addr == 0)
 				continue;
-			assert((elt->wr.wr_id >> 16) == i);
+			assert(WR_ID(elt->wr.wr_id).id == i);
 			buf = (void *)
-				(elt->sge.addr - (elt->wr.wr_id & 0xffff));
+				(elt->sge.addr - WR_ID(elt->wr.wr_id).offset);
 			rte_pktmbuf_free_seg(buf);
 		}
 		rte_free(elts);
@@ -1460,8 +1481,8 @@ rxq_free_elts(struct rxq *rxq)
 
 		if (elt->sge.addr == 0)
 			continue;
-		assert((elt->wr.wr_id >> 16) == i);
-		buf = (void *)(elt->sge.addr - (elt->wr.wr_id & 0xffff));
+		assert(WR_ID(elt->wr.wr_id).id == i);
+		buf = (void *)(elt->sge.addr - WR_ID(elt->wr.wr_id).offset);
 		rte_pktmbuf_free_seg(buf);
 	}
 	rte_free(elts);
@@ -2067,14 +2088,14 @@ mlx4_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		struct ibv_wc *wc = &wcs[i];
 		uint64_t wr_id = wc->wr_id;
 		uint32_t len = wc->byte_len;
-		struct rxq_elt *elt = &(*elts)[wr_id >> 16];
+		struct rxq_elt *elt = &(*elts)[WR_ID(wr_id).id];
 		struct ibv_recv_wr *wr = &elt->wr;
 		struct rte_mbuf *seg =
-			(void *)(elt->sge.addr - (wr_id & 0xffff));
+			(void *)(elt->sge.addr - WR_ID(wr_id).offset);
 		struct rte_mbuf *rep;
 
 		/* Sanity checks. */
-		assert((wr_id >> 16) < rxq->elts_n);
+		assert(WR_ID(wr_id).id < rxq->elts_n);
 		assert(wr_id == wr->wr_id);
 		assert(wr->sg_list == &elt->sge);
 		assert(wr->num_sge == 1);
@@ -2083,9 +2104,9 @@ mlx4_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		next = &wr->next;
 		if (unlikely(wc->status != IBV_WC_SUCCESS)) {
 			/* Whatever, just repost the offending WR. */
-			DEBUG("rxq=%p, wr_id=%" PRIu64 ": bad work completion"
+			DEBUG("rxq=%p, wr_id=%" PRIu32 ": bad work completion"
 			      " status (%d): %s",
-			      (void *)rxq, wr_id, wc->status,
+			      (void *)rxq, WR_ID(wr_id).id, wc->status,
 			      ibv_wc_status_str(wc->status));
 #ifdef MLX4_PMD_SOFT_COUNTERS
 			/* Increase dropped packets counter. */
@@ -2104,9 +2125,9 @@ mlx4_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			 * Unable to allocate a replacement mbuf,
 			 * repost WR.
 			 */
-			DEBUG("rxq=%p, wr_id=%" PRIu64 ":"
+			DEBUG("rxq=%p, wr_id=%" PRIu32 ":"
 			      " can't allocate a new mbuf",
-			      (void *)rxq, wr_id);
+			      (void *)rxq, WR_ID(wr_id).id);
 			/* Increase out of memory counters. */
 			++rxq->stats.rx_nombuf;
 			++rxq->priv->dev->data->rx_mbuf_alloc_failed;
@@ -2116,9 +2137,10 @@ mlx4_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		/* Reconfigure sge to use rep instead of seg. */
 		elt->sge.addr = (uintptr_t)rep->buf_addr + RTE_PKTMBUF_HEADROOM;
 		assert(elt->sge.lkey == rxq->mr->lkey);
-		wr->wr_id = ((wr_id & ~0xffff) |
-			     (((uintptr_t)rep->buf_addr +
-			       RTE_PKTMBUF_HEADROOM) - (uintptr_t)rep));
+		WR_ID(wr->wr_id).offset =
+			(((uintptr_t)rep->buf_addr + RTE_PKTMBUF_HEADROOM) -
+			 (uintptr_t)rep);
+		assert(WR_ID(wr->wr_id).id == WR_ID(wr_id).id);
 
 		/* Update seg information. */
 		SET_DATA_OFF(seg, RTE_PKTMBUF_HEADROOM);
@@ -2142,8 +2164,8 @@ mlx4_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	*next = NULL;
 	/* Repost WRs. */
 #ifdef DEBUG_RECV
-	DEBUG("%p: reposting %d WRs starting from %" PRIu64 " (%p)",
-	      (void *)rxq, wcs_n, wcs[0].wr_id, (void *)head.next);
+	DEBUG("%p: reposting %d WRs starting from %" PRIu32 " (%p)",
+	      (void *)rxq, wcs_n, WR_ID(wcs[0].wr_id).id, (void *)head.next);
 #endif
 	i = ibv_post_recv(rxq->qp, head.next, &bad_wr);
 	if (unlikely(i)) {
@@ -2355,9 +2377,9 @@ rxq_rehash(struct rte_eth_dev *dev, struct rxq *rxq)
 		for (i = 0; (i != elemof(*elts)); ++i) {
 			struct rxq_elt *elt = &(*elts)[i];
 			struct rte_mbuf *buf = (void *)
-				(elt->sge.addr - (elt->wr.wr_id & 0xffff));
+				(elt->sge.addr - WR_ID(elt->wr.wr_id).offset);
 
-			assert((elt->wr.wr_id >> 16) == i);
+			assert(WR_ID(elt->wr.wr_id).id == i);
 			pool[k++] = buf;
 		}
         }
