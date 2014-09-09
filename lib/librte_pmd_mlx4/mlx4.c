@@ -457,12 +457,16 @@ priv_get_mtu(struct priv *priv, uint16_t *mtu)
 	return 0;
 }
 
+#ifdef HAVE_MTU_SET
+
 /* Set device MTU. */
 static int
 priv_set_mtu(struct priv *priv, uint16_t mtu)
 {
 	return priv_set_sysfs_ulong(priv, "mtu", mtu);
 }
+
+#endif /* HAVE_MTU_SET */
 
 /* Set device flags. */
 static int
@@ -2271,6 +2275,8 @@ rxq_setup_qp_rss(struct priv *priv, struct ibv_cq *cq, uint16_t desc,
 
 #endif /* RSS_SUPPORT */
 
+#ifdef HAVE_MTU_SET
+
 /*
  * rxq_rehash() does not allocate mbufs, which, if not done from the right
  * thread (such as a control thread), may corrupt the pool.
@@ -2442,6 +2448,8 @@ skip_rtr:
 	*rxq = tmpl;
 	return err;
 }
+
+#endif /* HAVE_MTU_SET */
 
 static int
 rxq_setup(struct rte_eth_dev *dev, struct rxq *rxq, uint16_t desc,
@@ -3206,6 +3214,8 @@ typedef uint16_t *mtu_t;
 #define IN_MTU_GET(mtu) *(mtu)
 #endif
 
+#ifdef HAVE_MTU_SET
+
 /* Setting the MTU affects hardware MRU (packets larger than the MTU cannot be
  * received). Use this as a hint to enable/disable scattered packets support
  * and improve performance when not needed.
@@ -3283,6 +3293,10 @@ out:
 	return ret;
 }
 
+#endif /* HAVE_MTU_SET */
+
+#ifdef HAVE_FLOW_CTRL_GET
+
 static int
 mlx4_dev_get_flow_ctrl(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 {
@@ -3302,7 +3316,9 @@ mlx4_dev_get_flow_ctrl(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 		goto out;
 	}
 
+#ifdef HAVE_FC_CONF_AUTONEG
 	fc_conf->autoneg = ethpause.autoneg;
+#endif
 	if (ethpause.rx_pause && ethpause.tx_pause)
 		fc_conf->mode = RTE_FC_FULL;
 	else if (ethpause.rx_pause)
@@ -3318,6 +3334,8 @@ out:
 	return ret;
 }
 
+#endif /* HAVE_FLOW_CTRL_GET */
+
 static int
 mlx4_dev_set_flow_ctrl(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 {
@@ -3327,8 +3345,9 @@ mlx4_dev_set_flow_ctrl(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 	int ret;
 
 	ifr.ifr_data = &ethpause;
+#ifdef HAVE_FC_CONF_AUTONEG
 	ethpause.autoneg = fc_conf->autoneg;
-
+#endif
 	if ((fc_conf->mode & RTE_FC_FULL) || (fc_conf->mode & RTE_FC_RX_PAUSE))
 		ethpause.rx_pause = 1;
 	else
@@ -3468,7 +3487,9 @@ static struct eth_dev_ops mlx4_dev_ops = {
 	.tx_queue_release = mlx4_tx_queue_release,
 	.dev_led_on = NULL,
 	.dev_led_off = NULL,
+#ifdef HAVE_FLOW_CTRL_GET
 	.flow_ctrl_get = mlx4_dev_get_flow_ctrl,
+#endif
 	.flow_ctrl_set = mlx4_dev_set_flow_ctrl,
 	.priority_flow_ctrl_set = NULL,
 	.mac_addr_remove = mlx4_mac_addr_remove,
@@ -3476,7 +3497,9 @@ static struct eth_dev_ops mlx4_dev_ops = {
 #ifdef HAVE_MTU_GET
 	.mtu_get = mlx4_dev_get_mtu,
 #endif
+#ifdef HAVE_MTU_SET
 	.mtu_set = mlx4_dev_set_mtu,
+#endif
 	.fdir_add_signature_filter = NULL,
 	.fdir_update_signature_filter = NULL,
 	.fdir_remove_signature_filter = NULL,

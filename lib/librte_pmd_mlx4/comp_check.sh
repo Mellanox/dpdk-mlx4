@@ -12,7 +12,7 @@
 file=${1:?output file name required (config.h)}
 macro=${2:?output macro name required (HAVE_*)}
 include=${3:?include name required (foo.h)}
-type=${4:?object type required (define, enum, type, func)}
+type=${4:?object type required (define, enum, type, field, func)}
 name=${5:?define/type/function name required}
 
 : ${CC:=cc}
@@ -35,6 +35,16 @@ int test____ = $name;
 type)
 	code="\
 $name test____;
+"
+	;;
+field)
+	code="\
+void test____(void)
+{
+	${name%%.*} test_____;
+
+	(void)test_____.${name#*.};
+}
 "
 	;;
 func)

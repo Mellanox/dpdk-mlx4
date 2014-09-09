@@ -18,7 +18,7 @@ This driver is based on *libibverbs* and currently supports:
 - Software counters/statistics
 - Start/stop/close operations
 - Multiple physical ports host adapter
-- DPDK 1.7.0 or above from `dpdk.org <http://www.dpdk.org/>`_.
+- DPDK 1.6.0 or above from `dpdk.org <http://www.dpdk.org/>`_.
 
 Known limitations
 -----------------

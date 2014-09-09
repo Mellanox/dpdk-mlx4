@@ -85,6 +85,22 @@ config.h: comp_check.sh
 			-DRTE_LOG_LEVEL=0" sh -- $< \
 		$@ HAVE_MTU_SET \
 		rte_ethdev.h type mtu_set_t
+	CC="$(CC)" \
+		CFLAGS="$(CFLAGS) \
+			-DRTE_MAX_LCORE=64 \
+			-DRTE_PKTMBUF_HEADROOM=128 \
+			-DRTE_ETHDEV_QUEUE_STAT_CNTRS=2 \
+			-DRTE_LOG_LEVEL=0" sh -- $< \
+		$@ HAVE_FC_CONF_AUTONEG \
+		rte_ethdev.h field 'struct rte_eth_fc_conf.autoneg'
+	CC="$(CC)" \
+		CFLAGS="$(CFLAGS) \
+			-DRTE_MAX_LCORE=64 \
+			-DRTE_PKTMBUF_HEADROOM=128 \
+			-DRTE_ETHDEV_QUEUE_STAT_CNTRS=2 \
+			-DRTE_LOG_LEVEL=0" sh -- $< \
+		$@ HAVE_FLOW_CTRL_GET \
+		rte_ethdev.h field 'struct eth_dev_ops.flow_ctrl_get'
 
 $(OBJ): $(SRC) $(HDR) config.h
 
