@@ -1,4 +1,4 @@
-# Copyright 6WIND 2012-2013, All rights reserved.
+# Copyright 6WIND 2012-2014, All rights reserved.
 # Copyright Mellanox 2012, All rights reserved.
 
 prefix ?= /usr/local/dpdk-addons
@@ -12,6 +12,7 @@ docdir ?= $(datarootdir)/doc
 
 OUT = librte_pmd_mlx4.so
 O ?= .
+Q ?= @
 SOLIB=$O/$(OUT)
 
 SRC = mlx4.c
@@ -49,7 +50,7 @@ install:
 
 doc: doc-default
 doc-%: FORCE
-	@ $(MAKE) -rR --no-print-directory -C doc \
+	$Q $(MAKE) -rR --no-print-directory -C doc \
 		DOC_TOOLS=$(abspath $(DOC_TOOLS)) \
 		O=$(abspath $O)/doc \
 		DESTDIR=$(abspath $(DESTDIR))$(docdir) \
@@ -57,19 +58,19 @@ doc-%: FORCE
 
 config.h: comp_check.sh
 	$(RM) $@
-	CC="$(CC)" CFLAGS="$(CFLAGS)" sh -- $< \
+	$Q CC="$(CC)" CFLAGS="$(CFLAGS)" sh -- $< \
 		$@ RSS_SUPPORT \
 		infiniband/verbs.h enum IBV_EXP_DEVICE_UD_RSS
-	CC="$(CC)" CFLAGS="$(CFLAGS)" sh -- $< \
+	$Q CC="$(CC)" CFLAGS="$(CFLAGS)" sh -- $< \
 		$@ SEND_RAW_WR_SUPPORT \
 		infiniband/verbs.h type 'struct ibv_send_wr_raw'
-	CC="$(CC)" \
+	$Q CC="$(CC)" \
 		CFLAGS="$(CFLAGS) \
 			-DRTE_MAX_LCORE=64 \
 			-DRTE_PKTMBUF_HEADROOM=128" sh -- $< \
 		$@ HAVE_STRUCT_RTE_PKTMBUF \
 		rte_mbuf.h type 'struct rte_pktmbuf'
-	CC="$(CC)" \
+	$Q CC="$(CC)" \
 		CFLAGS="$(CFLAGS) \
 			-DRTE_MAX_LCORE=64 \
 			-DRTE_PKTMBUF_HEADROOM=128 \
@@ -77,7 +78,7 @@ config.h: comp_check.sh
 			-DRTE_LOG_LEVEL=0" sh -- $< \
 		$@ HAVE_MTU_GET \
 		rte_ethdev.h type mtu_get_t
-	CC="$(CC)" \
+	$Q CC="$(CC)" \
 		CFLAGS="$(CFLAGS) \
 			-DRTE_MAX_LCORE=64 \
 			-DRTE_PKTMBUF_HEADROOM=128 \
@@ -85,7 +86,7 @@ config.h: comp_check.sh
 			-DRTE_LOG_LEVEL=0" sh -- $< \
 		$@ HAVE_MTU_SET \
 		rte_ethdev.h type mtu_set_t
-	CC="$(CC)" \
+	$Q CC="$(CC)" \
 		CFLAGS="$(CFLAGS) \
 			-DRTE_MAX_LCORE=64 \
 			-DRTE_PKTMBUF_HEADROOM=128 \
@@ -93,7 +94,7 @@ config.h: comp_check.sh
 			-DRTE_LOG_LEVEL=0" sh -- $< \
 		$@ HAVE_FC_CONF_AUTONEG \
 		rte_ethdev.h field 'struct rte_eth_fc_conf.autoneg'
-	CC="$(CC)" \
+	$Q CC="$(CC)" \
 		CFLAGS="$(CFLAGS) \
 			-DRTE_MAX_LCORE=64 \
 			-DRTE_PKTMBUF_HEADROOM=128 \

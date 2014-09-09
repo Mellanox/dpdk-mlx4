@@ -5,6 +5,8 @@
 # perform cross-platform checks since the resulting object file isn't
 # executed.
 #
+# Set VERBOSE=1 in the environment to display compiler output and errors.
+#
 # Uses environment variable for CC, CPPFLAGS and CFLAGS.
 #
 # Always successful unless the output file cannot be written to.
@@ -58,14 +60,27 @@ void (*test____)() = (void (*)())$name;
 	exit
 esac
 
-printf '+ Looking for %s %s in %s.\n' "${name}" "${type}" "${include}"
-
+if [ "${VERBOSE}" = 1 ]
+then
+	err=2
+	out=1
+	eol='
+'
+else
+	exec 3> /dev/null ||
+	exit
+	err=3
+	out=3
+	eol=' '
+fi &&
+printf 'Looking for %s %s in %s.%s' \
+	"${name}" "${type}" "${include}" "${eol}" &&
 printf "\
 #include <%s>
 
 %s
 " "$include" "$code" > "${temp}" &&
-if ${CC} ${CPPFLAGS} ${CFLAGS} -c -o /dev/null "${temp}"
+if ${CC} ${CPPFLAGS} ${CFLAGS} -c -o /dev/null "${temp}" 1>&${out} 2>&${err}
 then
 	rm -f "${temp}"
 	printf "\
@@ -74,14 +89,14 @@ then
 #endif /* %s */
 
 " "${macro}" "${macro}" "${macro}" >> "${file}" &&
-	printf '+ Found %s in %s.\n' "${name}" "${include}"
+	printf 'Defining %s.\n' "${macro}"
 else
 	rm -f "${temp}"
 	printf "\
 /* %s is not defined. */
 
 " "${macro}" >> "${file}" &&
-	printf '+ Did not find %s in %s.\n' "${name}" "${include}"
+	printf 'Not defining %s.\n' "${macro}"
 fi
 
 exit
