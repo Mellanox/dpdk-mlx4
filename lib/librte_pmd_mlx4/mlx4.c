@@ -2294,7 +2294,7 @@ rxq_rehash(struct rte_eth_dev *dev, struct rxq *rxq)
 	unsigned int desc_n;
 	struct rte_mbuf **pool;
 	unsigned int i, k;
-	struct ibv_qp_attr mod;
+	struct ibv_exp_qp_attr mod;
 	struct ibv_recv_wr *bad_wr;
 	int err;
 	int parent = (rxq == &priv->rxq_parent);
@@ -2338,8 +2338,8 @@ rxq_rehash(struct rte_eth_dev *dev, struct rxq *rxq)
 	}
 	/* From now on, any failure will render the queue unusable.
 	 * Reinitialize QP. */
-	mod = (struct ibv_qp_attr){ .qp_state = IBV_QPS_RESET };
-	if ((err = ibv_modify_qp(tmpl.qp, &mod, IBV_QP_STATE))) {
+	mod = (struct ibv_exp_qp_attr){ .qp_state = IBV_QPS_RESET };
+	if ((err = ibv_exp_modify_qp(tmpl.qp, &mod, IBV_EXP_QP_STATE))) {
 		DEBUG("%p: cannot reset QP: %s", (void *)dev, strerror(err));
 		return -err;
 	}
@@ -2347,18 +2347,18 @@ rxq_rehash(struct rte_eth_dev *dev, struct rxq *rxq)
 		DEBUG("%p: cannot resize CQ: %s", (void *)dev, strerror(err));
 		return -err;
 	}
-	mod = (struct ibv_qp_attr){
+	mod = (struct ibv_exp_qp_attr){
 		/* Move the QP to this state. */
 		.qp_state = IBV_QPS_INIT,
 		/* Primary port number. */
 		.port_num = priv->port
 	};
-	if ((err = ibv_modify_qp(tmpl.qp, &mod,
-				 (IBV_QP_STATE |
+	if ((err = ibv_exp_modify_qp(tmpl.qp, &mod,
+				 (IBV_EXP_QP_STATE |
 #if RSS_SUPPORT
-				  (parent ? IBV_QP_GROUP_RSS : 0) |
+				  (parent ? IBV_EXP_QP_GROUP_RSS : 0) |
 #endif /* RSS_SUPPORT */
-				  IBV_QP_PORT)))) {
+				  IBV_EXP_QP_PORT)))) {
 		DEBUG("%p: QP state to IBV_QPS_INIT failed: %s",
 		      (void *)dev, strerror(err));
 		return -err;
@@ -2441,10 +2441,10 @@ rxq_rehash(struct rte_eth_dev *dev, struct rxq *rxq)
 		      strerror(err));
 		goto skip_rtr;
 	}
-	mod = (struct ibv_qp_attr){
+	mod = (struct ibv_exp_qp_attr){
 		.qp_state = IBV_QPS_RTR
 	};
-	if ((err = ibv_modify_qp(tmpl.qp, &mod, IBV_QP_STATE)))
+	if ((err = ibv_exp_modify_qp(tmpl.qp, &mod, IBV_EXP_QP_STATE)))
 		DEBUG("%p: QP state to IBV_QPS_RTR failed: %s",
 		      (void *)dev, strerror(err));
 skip_rtr:
