@@ -47,6 +47,7 @@
 #include <rte_spinlock.h>
 #include <rte_atomic.h>
 #include <rte_version.h>
+#include <rte_log.h>
 #ifdef PEDANTIC
 #pragma GCC diagnostic error "-pedantic"
 #endif
@@ -68,6 +69,21 @@
 
 /* PMD header. */
 #include "mlx4.h"
+
+/* Runtime logging through RTE_LOG() is enabled when not in debugging mode.
+ * Intermediate LOG_*() macros add the required end-of-line characters. */
+#ifndef NDEBUG
+#define INFO(...) DEBUG(__VA_ARGS__)
+#define WARN(...) DEBUG(__VA_ARGS__)
+#define ERROR(...) DEBUG(__VA_ARGS__)
+#else
+#define LOG__(level, m, ...) \
+	RTE_LOG(level, PMD, MLX4_DRIVER_NAME ": " m "%c", __VA_ARGS__)
+#define LOG_(level, ...) LOG__(level, __VA_ARGS__, '\n')
+#define INFO(...) LOG_(INFO, __VA_ARGS__)
+#define WARN(...) LOG_(WARNING, __VA_ARGS__)
+#define ERROR(...) LOG_(ERR, __VA_ARGS__)
+#endif
 
 /* Whether the old mbuf API should be used. */
 #ifdef HAVE_STRUCT_RTE_PKTMBUF
@@ -505,14 +521,14 @@ dev_configure(struct rte_eth_dev *dev)
 	priv->rxqs = (void *)dev->data->rx_queues;
 	priv->txqs = (void *)dev->data->tx_queues;
 	if (txqs_n != priv->txqs_n) {
-		DEBUG("%p: TX queues number update: %u -> %u",
-		      (void *)dev, priv->txqs_n, txqs_n);
+		INFO("%p: TX queues number update: %u -> %u",
+		     (void *)dev, priv->txqs_n, txqs_n);
 		priv->txqs_n = txqs_n;
 	}
 	if (rxqs_n == priv->rxqs_n)
 		return 0;
-	DEBUG("%p: RX queues number update: %u -> %u",
-	      (void *)dev, priv->rxqs_n, rxqs_n);
+	INFO("%p: RX queues number update: %u -> %u",
+	     (void *)dev, priv->rxqs_n, rxqs_n);
 	/* If RSS is enabled, disable it first. */
 	if (priv->rss) {
 		unsigned int i;
@@ -532,14 +548,14 @@ dev_configure(struct rte_eth_dev *dev)
 	}
 	/* Allocate a new RSS parent queue if supported by hardware. */
 	if (!priv->hw_rss) {
-		DEBUG("%p: only a single RX queue can be configured when"
+		ERROR("%p: only a single RX queue can be configured when"
 		      " hardware doesn't support RSS",
 		      (void *)dev);
 		return -EINVAL;
 	}
 	/* Fail if hardware doesn't support that many RSS queues. */
 	if (rxqs_n >= priv->max_rss_tbl_sz) {
-		DEBUG("%p: only %u RX queues can be configured for RSS",
+		ERROR("%p: only %u RX queues can be configured for RSS",
 		      (void *)dev, priv->max_rss_tbl_sz);
 		return -EINVAL;
 	}
@@ -582,7 +598,7 @@ txq_alloc_elts(struct txq *txq, unsigned int elts_n)
 	int ret = 0;
 
 	if ((elts == NULL) || (elts_linear == NULL)) {
-		DEBUG("%p: can't allocate packets array", (void *)txq);
+		ERROR("%p: can't allocate packets array", (void *)txq);
 		ret = ENOMEM;
 		goto error;
 	}
@@ -590,7 +606,7 @@ txq_alloc_elts(struct txq *txq, unsigned int elts_n)
 		ibv_reg_mr(txq->priv->pd, elts_linear, sizeof(*elts_linear),
 			   (IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE));
 	if (mr_linear == NULL) {
-		DEBUG("%p: unable to configure MR, ibv_reg_mr() failed",
+		ERROR("%p: unable to configure MR, ibv_reg_mr() failed",
 		      (void *)txq);
 		goto error;
 	}
@@ -1087,7 +1103,7 @@ txq_setup(struct rte_eth_dev *dev, struct txq *txq, uint16_t desc,
 
 	(void)conf; /* Thresholds configuration (ignored). */
 	if ((desc == 0) || (desc % MLX4_PMD_SGE_WR_N)) {
-		DEBUG("%p: invalid number of TX descriptors (must be a"
+		ERROR("%p: invalid number of TX descriptors (must be a"
 		      " multiple of %d)", (void *)dev, desc);
 		return -EINVAL;
 	}
@@ -1096,7 +1112,7 @@ txq_setup(struct rte_eth_dev *dev, struct txq *txq, uint16_t desc,
 	tmpl.cq = ibv_create_cq(priv->ctx, desc, NULL, NULL, 0);
 	if (tmpl.cq == NULL) {
 		ret = ENOMEM;
-		DEBUG("%p: CQ creation failure: %s",
+		ERROR("%p: CQ creation failure: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
 	}
@@ -1131,7 +1147,7 @@ txq_setup(struct rte_eth_dev *dev, struct txq *txq, uint16_t desc,
 	tmpl.qp = ibv_create_qp(priv->pd, &attr.init);
 	if (tmpl.qp == NULL) {
 		ret = errno;
-		DEBUG("%p: QP creation failure: %s",
+		ERROR("%p: QP creation failure: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
 	}
@@ -1147,12 +1163,12 @@ txq_setup(struct rte_eth_dev *dev, struct txq *txq, uint16_t desc,
 	};
 	if ((ret = ibv_exp_modify_qp(tmpl.qp, &attr.mod,
 				 (IBV_EXP_QP_STATE | IBV_EXP_QP_PORT)))) {
-		DEBUG("%p: QP state to IBV_QPS_INIT failed: %s",
+		ERROR("%p: QP state to IBV_QPS_INIT failed: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
 	}
 	if ((ret = txq_alloc_elts(&tmpl, desc))) {
-		DEBUG("%p: TXQ allocation failed: %s",
+		ERROR("%p: TXQ allocation failed: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
 	}
@@ -1160,13 +1176,13 @@ txq_setup(struct rte_eth_dev *dev, struct txq *txq, uint16_t desc,
 		.qp_state = IBV_QPS_RTR
 	};
 	if ((ret = ibv_exp_modify_qp(tmpl.qp, &attr.mod, IBV_EXP_QP_STATE))) {
-		DEBUG("%p: QP state to IBV_QPS_RTR failed: %s",
+		ERROR("%p: QP state to IBV_QPS_RTR failed: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
 	}
 	attr.mod.qp_state = IBV_QPS_RTS;
 	if ((ret = ibv_exp_modify_qp(tmpl.qp, &attr.mod, IBV_EXP_QP_STATE))) {
-		DEBUG("%p: QP state to IBV_QPS_RTS failed: %s",
+		ERROR("%p: QP state to IBV_QPS_RTS failed: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
 	}
@@ -1195,7 +1211,7 @@ mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	DEBUG("%p: configuring queue %u for %u descriptors",
 	      (void *)dev, idx, desc);
 	if (idx >= priv->txqs_n) {
-		DEBUG("%p: queue index out of range (%u >= %u)",
+		ERROR("%p: queue index out of range (%u >= %u)",
 		      (void *)dev, idx, priv->txqs_n);
 		priv_unlock(priv);
 		return -EOVERFLOW;
@@ -1213,7 +1229,7 @@ mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	else {
 		txq = rte_calloc_socket("TXQ", 1, sizeof(*txq), 0, socket);
 		if (txq == NULL) {
-			DEBUG("%p: unable to allocate queue index %u: %s",
+			ERROR("%p: unable to allocate queue index %u: %s",
 			      (void *)dev, idx, strerror(errno));
 			priv_unlock(priv);
 			return -errno;
@@ -1270,7 +1286,7 @@ rxq_alloc_elts_sp(struct rxq *rxq, unsigned int elts_n,
 	int ret = 0;
 
 	if (elts == NULL) {
-		DEBUG("%p: can't allocate packets array", (void *)rxq);
+		ERROR("%p: can't allocate packets array", (void *)rxq);
 		ret = ENOMEM;
 		goto error;
 	}
@@ -1302,7 +1318,7 @@ rxq_alloc_elts_sp(struct rxq *rxq, unsigned int elts_n,
 				buf = rte_pktmbuf_alloc(rxq->mp);
 			if (buf == NULL) {
 				assert(pool == NULL);
-				DEBUG("%p: empty mbuf pool", (void *)rxq);
+				ERROR("%p: empty mbuf pool", (void *)rxq);
 				ret = ENOMEM;
 				goto error;
 			}
@@ -1398,7 +1414,7 @@ rxq_alloc_elts(struct rxq *rxq, unsigned int elts_n, struct rte_mbuf **pool)
 	int ret = 0;
 
 	if (elts == NULL) {
-		DEBUG("%p: can't allocate packets array", (void *)rxq);
+		ERROR("%p: can't allocate packets array", (void *)rxq);
 		ret = ENOMEM;
 		goto error;
 	}
@@ -1418,7 +1434,7 @@ rxq_alloc_elts(struct rxq *rxq, unsigned int elts_n, struct rte_mbuf **pool)
 			buf = rte_pktmbuf_alloc(rxq->mp);
 		if (buf == NULL) {
 			assert(pool == NULL);
-			DEBUG("%p: empty mbuf pool", (void *)rxq);
+			ERROR("%p: empty mbuf pool", (void *)rxq);
 			ret = ENOMEM;
 			goto error;
 		}
@@ -1450,7 +1466,7 @@ rxq_alloc_elts(struct rxq *rxq, unsigned int elts_n, struct rte_mbuf **pool)
 		 * from WR ID. */
 		if ((WR_ID(wr->wr_id).id != i) ||
 		    ((void *)(sge->addr - WR_ID(wr->wr_id).offset) != buf)) {
-			DEBUG("%p: cannot store index and offset in WR ID",
+			ERROR("%p: cannot store index and offset in WR ID",
 			      (void *)rxq);
 			sge->addr = 0;
 			rte_pktmbuf_free(buf);
@@ -1650,7 +1666,7 @@ rxq_mac_addr_add(struct rxq *rxq, unsigned int mac_index)
 	errno = 0;
 	if ((flow = ibv_exp_create_flow(rxq->qp, attr)) == NULL) {
 		/* It's not clear whether errno is always set in this case. */
-		DEBUG("%p: flow configuration failed, errno=%d: %s",
+		ERROR("%p: flow configuration failed, errno=%d: %s",
 		      (void *)rxq, errno,
 		      (errno ? strerror(errno) : "Unknown error"));
 		if (errno)
@@ -1779,7 +1795,7 @@ rxq_allmulticast_enable(struct rxq *rxq)
 
 #ifdef MLX4_COMPAT_VMWARE
 	if (rxq->priv->vmware) {
-		DEBUG("%p: allmulticast mode is not supported in VMware",
+		ERROR("%p: allmulticast mode is not supported in VMware",
 		      (void *)rxq);
 		return EINVAL;
 	}
@@ -1790,7 +1806,7 @@ rxq_allmulticast_enable(struct rxq *rxq)
 	errno = 0;
 	if ((flow = ibv_exp_create_flow(rxq->qp, &attr)) == NULL) {
 		/* It's not clear whether errno is always set in this case. */
-		DEBUG("%p: flow configuration failed, errno=%d: %s",
+		ERROR("%p: flow configuration failed, errno=%d: %s",
 		      (void *)rxq, errno,
 		      (errno ? strerror(errno) : "Unknown error"));
 		if (errno)
@@ -1807,7 +1823,7 @@ rxq_allmulticast_disable(struct rxq *rxq)
 {
 #ifdef MLX4_COMPAT_VMWARE
 	if (rxq->priv->vmware) {
-		DEBUG("%p: allmulticast mode is not supported in VMware",
+		ERROR("%p: allmulticast mode is not supported in VMware",
 		      (void *)rxq);
 		return;
 	}
@@ -1839,7 +1855,7 @@ rxq_promiscuous_enable(struct rxq *rxq)
 
 #ifdef MLX4_COMPAT_VMWARE
 	if (rxq->priv->vmware) {
-		DEBUG("%p: promiscuous mode is not supported in VMware",
+		ERROR("%p: promiscuous mode is not supported in VMware",
 		      (void *)rxq);
 		return EINVAL;
 	}
@@ -1850,7 +1866,7 @@ rxq_promiscuous_enable(struct rxq *rxq)
 	errno = 0;
 	if ((flow = ibv_exp_create_flow(rxq->qp, &attr)) == NULL) {
 		/* It's not clear whether errno is always set in this case. */
-		DEBUG("%p: flow configuration failed, errno=%d: %s",
+		ERROR("%p: flow configuration failed, errno=%d: %s",
 		      (void *)rxq, errno,
 		      (errno ? strerror(errno) : "Unknown error"));
 		if (errno)
@@ -1867,7 +1883,7 @@ rxq_promiscuous_disable(struct rxq *rxq)
 {
 #ifdef MLX4_COMPAT_VMWARE
 	if (rxq->priv->vmware) {
-		DEBUG("%p: promiscuous mode is not supported in VMware",
+		ERROR("%p: promiscuous mode is not supported in VMware",
 		      (void *)rxq);
 		return;
 	}
@@ -2300,7 +2316,7 @@ rxq_rehash(struct rte_eth_dev *dev, struct rxq *rxq)
 	int parent = (rxq == &priv->rxq_parent);
 
 	if (parent) {
-		DEBUG("%p: cannot rehash parent queue %p",
+		ERROR("%p: cannot rehash parent queue %p",
 		      (void *)dev, (void *)rxq);
 		return -EINVAL;
 	}
@@ -2340,11 +2356,11 @@ rxq_rehash(struct rte_eth_dev *dev, struct rxq *rxq)
 	 * Reinitialize QP. */
 	mod = (struct ibv_exp_qp_attr){ .qp_state = IBV_QPS_RESET };
 	if ((err = ibv_exp_modify_qp(tmpl.qp, &mod, IBV_EXP_QP_STATE))) {
-		DEBUG("%p: cannot reset QP: %s", (void *)dev, strerror(err));
+		ERROR("%p: cannot reset QP: %s", (void *)dev, strerror(err));
 		return -err;
 	}
 	if ((err = ibv_resize_cq(tmpl.cq, desc_n))) {
-		DEBUG("%p: cannot resize CQ: %s", (void *)dev, strerror(err));
+		ERROR("%p: cannot resize CQ: %s", (void *)dev, strerror(err));
 		return -err;
 	}
 	mod = (struct ibv_exp_qp_attr){
@@ -2359,7 +2375,7 @@ rxq_rehash(struct rte_eth_dev *dev, struct rxq *rxq)
 				  (parent ? IBV_EXP_QP_GROUP_RSS : 0) |
 #endif /* RSS_SUPPORT */
 				  IBV_EXP_QP_PORT)))) {
-		DEBUG("%p: QP state to IBV_QPS_INIT failed: %s",
+		ERROR("%p: QP state to IBV_QPS_INIT failed: %s",
 		      (void *)dev, strerror(err));
 		return -err;
 	};
@@ -2380,7 +2396,7 @@ rxq_rehash(struct rte_eth_dev *dev, struct rxq *rxq)
 	/* Allocate pool. */
 	pool = rte_malloc(__func__, (mbuf_n * sizeof(*pool)), 0);
 	if (pool == NULL) {
-		DEBUG("%p: cannot allocate memory", (void *)dev);
+		ERROR("%p: cannot allocate memory", (void *)dev);
 		return -ENOBUFS;
 	}
 	/* Snatch mbufs from original queue. */
@@ -2418,7 +2434,7 @@ rxq_rehash(struct rte_eth_dev *dev, struct rxq *rxq)
 	       rxq_alloc_elts_sp(&tmpl, desc_n, pool) :
 	       rxq_alloc_elts(&tmpl, desc_n, pool));
 	if (err) {
-		DEBUG("%p: cannot reallocate WRs, aborting", (void *)dev);
+		ERROR("%p: cannot reallocate WRs, aborting", (void *)dev);
 		rte_free(pool);
 		return -err;
 	}
@@ -2435,7 +2451,7 @@ rxq_rehash(struct rte_eth_dev *dev, struct rxq *rxq)
 				  &(*tmpl.elts.sp)[0].wr :
 				  &(*tmpl.elts.no_sp)[0].wr),
 				 &bad_wr))) {
-		DEBUG("%p: ibv_post_recv() failed for WR %p: %s",
+		ERROR("%p: ibv_post_recv() failed for WR %p: %s",
 		      (void *)dev,
 		      (void *)bad_wr,
 		      strerror(err));
@@ -2445,7 +2461,7 @@ rxq_rehash(struct rte_eth_dev *dev, struct rxq *rxq)
 		.qp_state = IBV_QPS_RTR
 	};
 	if ((err = ibv_exp_modify_qp(tmpl.qp, &mod, IBV_EXP_QP_STATE)))
-		DEBUG("%p: QP state to IBV_QPS_RTR failed: %s",
+		ERROR("%p: QP state to IBV_QPS_RTR failed: %s",
 		      (void *)dev, strerror(err));
 skip_rtr:
 	*rxq = tmpl;
@@ -2484,14 +2500,14 @@ rxq_setup(struct rte_eth_dev *dev, struct rxq *rxq, uint16_t desc,
 		goto skip_mr;
 	}
 	if ((desc == 0) || (desc % MLX4_PMD_SGE_WR_N)) {
-		DEBUG("%p: invalid number of RX descriptors (must be a"
+		ERROR("%p: invalid number of RX descriptors (must be a"
 		      " multiple of %d)", (void *)dev, desc);
 		return -EINVAL;
 	}
 	/* Get mbuf length. */
 	buf = rte_pktmbuf_alloc(mp);
 	if (buf == NULL) {
-		DEBUG("%p: unable to allocate mbuf", (void *)dev);
+		ERROR("%p: unable to allocate mbuf", (void *)dev);
 		return -ENOMEM;
 	}
 	tmpl.mb_len = buf->buf_len;
@@ -2516,7 +2532,7 @@ rxq_setup(struct rte_eth_dev *dev, struct rxq *rxq, uint16_t desc,
 			      IBV_ACCESS_REMOTE_WRITE));
 	if (tmpl.mr == NULL) {
 		ret = ENOMEM;
-		DEBUG("%p: MR creation failure: %s",
+		ERROR("%p: MR creation failure: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
 	}
@@ -2524,7 +2540,7 @@ skip_mr:
 	tmpl.cq = ibv_create_cq(priv->ctx, desc, NULL, NULL, 0);
 	if (tmpl.cq == NULL) {
 		ret = ENOMEM;
-		DEBUG("%p: CQ creation failure: %s",
+		ERROR("%p: CQ creation failure: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
 	}
@@ -2540,7 +2556,7 @@ skip_mr:
 		tmpl.qp = rxq_setup_qp(priv, tmpl.cq, desc);
 	if (tmpl.qp == NULL) {
 		ret = errno;
-		DEBUG("%p: QP creation failure: %s",
+		ERROR("%p: QP creation failure: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
 	}
@@ -2556,14 +2572,14 @@ skip_mr:
 				      (parent ? IBV_EXP_QP_GROUP_RSS : 0) |
 #endif /* RSS_SUPPORT */
 				      IBV_EXP_QP_PORT)))) {
-		DEBUG("%p: QP state to IBV_QPS_INIT failed: %s",
+		ERROR("%p: QP state to IBV_QPS_INIT failed: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
 	}
 	if ((parent) || (!priv->rss))  {
 		/* Configure MAC and broadcast addresses. */
 		if ((ret = rxq_mac_addrs_add(&tmpl))) {
-			DEBUG("%p: QP flow attachment failed: %s",
+			ERROR("%p: QP flow attachment failed: %s",
 			      (void *)dev, strerror(ret));
 			goto error;
 		}
@@ -2576,7 +2592,7 @@ skip_mr:
 	else
 		ret = rxq_alloc_elts(&tmpl, desc, NULL);
 	if (ret) {
-		DEBUG("%p: RXQ allocation failed: %s",
+		ERROR("%p: RXQ allocation failed: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
 	}
@@ -2585,7 +2601,7 @@ skip_mr:
 				  &(*tmpl.elts.sp)[0].wr :
 				  &(*tmpl.elts.no_sp)[0].wr),
 				 &bad_wr))) {
-		DEBUG("%p: ibv_post_recv() failed for WR %p: %s",
+		ERROR("%p: ibv_post_recv() failed for WR %p: %s",
 		      (void *)dev,
 		      (void *)bad_wr,
 		      strerror(ret));
@@ -2596,7 +2612,7 @@ skip_alloc:
 		.qp_state = IBV_QPS_RTR
 	};
 	if ((ret = ibv_exp_modify_qp(tmpl.qp, &mod, IBV_EXP_QP_STATE))) {
-		DEBUG("%p: QP state to IBV_QPS_RTR failed: %s",
+		ERROR("%p: QP state to IBV_QPS_RTR failed: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
 	}
@@ -2629,7 +2645,7 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	DEBUG("%p: configuring queue %u for %u descriptors",
 	      (void *)dev, idx, desc);
 	if (idx >= priv->rxqs_n) {
-		DEBUG("%p: queue index out of range (%u >= %u)",
+		ERROR("%p: queue index out of range (%u >= %u)",
 		      (void *)dev, idx, priv->rxqs_n);
 		priv_unlock(priv);
 		return -EOVERFLOW;
@@ -2647,7 +2663,7 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	else {
 		rxq = rte_calloc_socket("RXQ", 1, sizeof(*rxq), 0, socket);
 		if (rxq == NULL) {
-			DEBUG("%p: unable to allocate queue index %u: %s",
+			ERROR("%p: unable to allocate queue index %u: %s",
 			      (void *)dev, idx, strerror(errno));
 			priv_unlock(priv);
 			return -errno;
@@ -2732,8 +2748,8 @@ mlx4_dev_start(struct rte_eth_dev *dev)
 		    ((!priv->allmulti) ||
 		     ((ret = rxq_allmulticast_enable(rxq)) == 0)))
 			continue;
-		DEBUG("%p: QP flow attachment failed: %s",
-		      (void *)dev, strerror(ret));
+		WARN("%p: QP flow attachment failed: %s",
+		     (void *)dev, strerror(ret));
 		/* Rollback. */
 		while (i != 0)
 			if ((rxq = (*priv->rxqs)[--i]) != NULL) {
@@ -3154,7 +3170,7 @@ mlx4_link_update_unlocked(struct rte_eth_dev *dev, int wait_to_complete)
 
 	(void)wait_to_complete;
 	if ((errno = ibv_query_port(priv->ctx, priv->port, &port_attr))) {
-		DEBUG("port query failed: %s", strerror(errno));
+		WARN("port query failed: %s", strerror(errno));
 		return -1;
 	}
 	dev->data->dev_link = (struct rte_eth_link){
@@ -3238,8 +3254,8 @@ mlx4_dev_set_mtu(struct rte_eth_dev *dev, mtu_t in_mtu)
 	/* Set kernel interface MTU first. */
 	if (priv_set_mtu(priv, mtu)) {
 		ret = errno;
-		DEBUG("cannot set port %u MTU to %u: %s", priv->port, mtu,
-		      strerror(errno));
+		WARN("cannot set port %u MTU to %u: %s", priv->port, mtu,
+		     strerror(errno));
 		goto out;
 	}
 	else
@@ -3313,9 +3329,9 @@ mlx4_dev_get_flow_ctrl(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 	priv_lock(priv);
 	if (priv_ifreq(priv, SIOCETHTOOL, &ifr)) {
 		ret = errno;
-		DEBUG("ioctl(SIOCETHTOOL, ETHTOOL_GPAUSEPARAM)"
-		      " failed: %s",
-		      strerror(errno));
+		WARN("ioctl(SIOCETHTOOL, ETHTOOL_GPAUSEPARAM)"
+		     " failed: %s",
+		     strerror(errno));
 		goto out;
 	}
 
@@ -3364,9 +3380,9 @@ mlx4_dev_set_flow_ctrl(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 	priv_lock(priv);
 	if (priv_ifreq(priv, SIOCETHTOOL, &ifr)) {
 		ret = errno;
-		DEBUG("ioctl(SIOCETHTOOL, ETHTOOL_SPAUSEPARAM)"
-		      " failed: %s",
-		      strerror(errno));
+		WARN("ioctl(SIOCETHTOOL, ETHTOOL_SPAUSEPARAM)"
+		     " failed: %s",
+		     strerror(errno));
 		goto out;
 	}
 	ret = 0;
@@ -3617,7 +3633,7 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 	/* Get mlx4_dev[] index. */
 	idx = mlx4_dev_idx(&pci_dev->addr);
 	if (idx == -1) {
-		DEBUG("this driver cannot support any more adapters");
+		ERROR("this driver cannot support any more adapters");
 		return -ENOMEM;
 	}
 	DEBUG("using driver device index %d", idx);
@@ -3648,8 +3664,8 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 			continue;
 		vf = (pci_dev->id.device_id ==
 		      PCI_DEVICE_ID_MELLANOX_CONNECTX3VF);
-		DEBUG("PCI information matches, using device \"%s\" (VF: %s)",
-		      list[i]->name, (vf ? "true" : "false"));
+		INFO("PCI information matches, using device \"%s\" (VF: %s)",
+		     list[i]->name, (vf ? "true" : "false"));
 		attr_ctx = ibv_open_device(list[i]);
 		err = errno;
 		break;
@@ -3666,7 +3682,7 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 	DEBUG("device opened");
 	if (ibv_query_device(attr_ctx, &device_attr))
 		goto error;
-	DEBUG("%u port(s) detected", device_attr.phys_port_cnt);
+	INFO("%u port(s) detected", device_attr.phys_port_cnt);
 
 	for (i = 0; i < device_attr.phys_port_cnt; i++) {
 		uint32_t port = i + 1; /* ports are indexed from one */
@@ -3693,18 +3709,18 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 
 		/* Check port status. */
 		if ((errno = ibv_query_port(ctx, port, &port_attr))) {
-			DEBUG("port query failed: %s", strerror(errno));
+			ERROR("port query failed: %s", strerror(errno));
 			goto port_error;
 		}
 		if (port_attr.state != IBV_PORT_ACTIVE)
-			DEBUG("bad state for port %d: \"%s\" (%d)",
-			      port, ibv_port_state_str(port_attr.state),
-			      port_attr.state);
+			WARN("bad state for port %d: \"%s\" (%d)",
+			     port, ibv_port_state_str(port_attr.state),
+			     port_attr.state);
 
 		/* Allocate protection domain. */
 		pd = ibv_alloc_pd(ctx);
 		if (pd == NULL) {
-			DEBUG("PD allocation failure");
+			ERROR("PD allocation failure");
 			errno = ENOMEM;
 			goto port_error;
 		}
@@ -3716,7 +3732,7 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		                   sizeof(*priv),
 		                   CACHE_LINE_SIZE);
 		if (priv == NULL) {
-			DEBUG("priv allocation failure");
+			ERROR("priv allocation failure");
 			errno = ENOMEM;
 			goto port_error;
 		}
@@ -3729,7 +3745,7 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		priv->mtu = ETHER_MTU;
 #if RSS_SUPPORT
 		if (ibv_exp_query_device(ctx, &exp_device_attr)) {
-			DEBUG("experimental ibv_exp_query_device");
+			INFO("experimental ibv_exp_query_device");
 			goto port_error;
 		}
 		if ((exp_device_attr.exp_device_cap_flags & IBV_EXP_DEVICE_QPG) &&
@@ -3763,16 +3779,16 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 #endif /* MLX4_COMPAT_VMWARE */
 		priv->vf = vf;
 		if (ibv_query_gid(ctx, port, 0, &temp_gid)) {
-			DEBUG("ibv_query_gid() failure");
+			ERROR("ibv_query_gid() failure");
 			goto port_error;
 		}
 		/* Configure the first MAC address by default. */
 		mac_from_gid(&mac.addr_bytes, port, temp_gid.raw);
-		DEBUG("port %u MAC address is %02x:%02x:%02x:%02x:%02x:%02x",
-		      priv->port,
-		      mac.addr_bytes[0], mac.addr_bytes[1],
-		      mac.addr_bytes[2], mac.addr_bytes[3],
-		      mac.addr_bytes[4], mac.addr_bytes[5]);
+		INFO("port %u MAC address is %02x:%02x:%02x:%02x:%02x:%02x",
+		     priv->port,
+		     mac.addr_bytes[0], mac.addr_bytes[1],
+		     mac.addr_bytes[2], mac.addr_bytes[3],
+		     mac.addr_bytes[4], mac.addr_bytes[5]);
 		/* Register MAC and broadcast addresses. */
 		claim_zero(priv_mac_addr_add(priv, 0,
 					     (const uint8_t (*)[ETHER_ADDR_LEN])
@@ -3807,7 +3823,7 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		eth_dev = rte_eth_dev_allocate();
 #endif
 		if (eth_dev == NULL) {
-			DEBUG("can not allocate rte ethdev");
+			ERROR("can not allocate rte ethdev");
 			errno = ENOMEM;
 			goto port_error;
 		}
