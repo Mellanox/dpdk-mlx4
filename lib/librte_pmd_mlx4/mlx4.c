@@ -214,7 +214,12 @@ struct txq_elt {
 	/* mbuf pointer is derived from WR_ID(wr.wr_id).offset. */
 };
 
-/* Linear buffer type. Hardware cannot manage larger packets. */
+/* Linear buffer type. It is used when transmitting buffers with too many
+ * segments that do not fit the hardware queue (see max_send_sge).
+ * Extra segments are copied (linearized) in such buffers, replacing the
+ * last SGE during TX.
+ * The size is arbitrary but large enough to hold a jumbo frame with
+ * 8 segments considering mbuf.buf_len is about 2048 bytes. */
 typedef uint8_t linear_t[16384];
 
 /* TX queue descriptor. */
