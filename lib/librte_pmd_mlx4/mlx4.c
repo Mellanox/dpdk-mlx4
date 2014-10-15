@@ -3350,11 +3350,12 @@ mlx4_dev_get_flow_ctrl(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 {
 	struct priv *priv = dev->data->dev_private;
 	struct ifreq ifr;
-	struct ethtool_pauseparam ethpause;
+	struct ethtool_pauseparam ethpause = {
+		.cmd = ETHTOOL_GPAUSEPARAM
+	};
 	int ret;
 
 	ifr.ifr_data = &ethpause;
-	ethpause.cmd = ETHTOOL_GPAUSEPARAM;
 	priv_lock(priv);
 	if (priv_ifreq(priv, SIOCETHTOOL, &ifr)) {
 		ret = errno;
@@ -3389,7 +3390,9 @@ mlx4_dev_set_flow_ctrl(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 {
 	struct priv *priv = dev->data->dev_private;
 	struct ifreq ifr;
-	struct ethtool_pauseparam ethpause;
+	struct ethtool_pauseparam ethpause = {
+		.cmd = ETHTOOL_SPAUSEPARAM
+	};
 	int ret;
 
 	ifr.ifr_data = &ethpause;
