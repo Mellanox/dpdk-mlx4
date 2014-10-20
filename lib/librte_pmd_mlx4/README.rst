@@ -1,4 +1,4 @@
-.. Copyright (c) <2012-2013>, 6WIND
+.. Copyright (c) <2012-2014>, 6WIND
    All rights reserved.
 
 .. title:: Mellanox ConnectX-3 DPDK poll-mode driver
@@ -31,7 +31,7 @@ Known limitations
 Requirements
 ------------
 
-Linux host with either a full installation of Mellanox OFED 2.1 (updated
+Linux host with either a full installation of Mellanox OFED 2.3 (updated
 kernel drivers and libraries), or only the following components:
 
 - Mellanox OFA kernel drivers (*mlnx-ofa_kernel*)
