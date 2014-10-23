@@ -32,6 +32,12 @@ else
 CFLAGS += -DNDEBUG -UPEDANTIC
 endif
 
+ifneq ($(word 2,$(subst -, ,$(RTE_TARGET))),)
+ARCH := $(firstword $(subst -, ,$(RTE_TARGET)))
+else
+ARCH := $(shell uname -m)
+endif
+
 ifdef MLX4_PMD_SGE_WR_N
 CFLAGS += -DMLX4_PMD_SGE_WR_N=$(MLX4_PMD_SGE_WR_N)
 endif
@@ -66,6 +72,7 @@ config.h: comp_check.sh
 		infiniband/verbs.h type 'struct ibv_send_wr_raw'
 	$Q CC="$(CC)" \
 		CFLAGS="$(CFLAGS) \
+			$(if $(findstring ppc,$(ARCH)),-DRTE_ARCH_PPC_64=1) \
 			-DRTE_MAX_LCORE=64 \
 			-DRTE_PKTMBUF_HEADROOM=128" sh -- $< \
 		$@ HAVE_STRUCT_RTE_PKTMBUF \
