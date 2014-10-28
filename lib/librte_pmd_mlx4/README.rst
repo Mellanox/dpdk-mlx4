@@ -27,6 +27,7 @@ Known limitations
   properly.
 - RSS hash key and options cannot be modified.
 - Hardware counters are not implemented.
+- Number of configured RSS queues must be a power of 2.
 
 Requirements
 ------------
@@ -66,7 +67,11 @@ Make sure that kernel modules **mlx4_core**, **mlx4_en**, **mlx4_ib** and
 
  root# modprobe -a mlx4_core mlx4_en mlx4_ib ib_uverbs
 
-And that all interfaces are up::
+Packets cannot be emitted or received if physical interfaces are not in the
+"up" state. By default, loading **mlx4_core** does it automatically.
+
+However, once **mlx4_en** is loaded, system management scripts may bring them
+down afterwards. The following command forces them in the "up" state::
 
  root# for i in `echo /sys/class/net/*/device/infiniband_verbs/uverbs* | \
   sed -rn 's,/([^/]+/){3}([^/]+)[^ ]*,\2,g;p'`; do echo ip link set $i up; done
