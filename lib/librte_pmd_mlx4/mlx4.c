@@ -1870,12 +1870,6 @@ rxq_promiscuous_enable(struct rxq *rxq)
 {
 	struct ibv_exp_flow *flow;
 	struct ibv_exp_flow_attr attr = {
-		/*
-		 * XXX IBV_EXP_FLOW_ATTR_ALL_DEFAULT is used in place of
-		 * IBV_EXP_FLOW_ATTR_SNIFFER because the latter doesn't work
-		 * and triggers kernel Oopses in this version:
-		 * mlnx-ofa_kernel-2.0-OFED.2.0.0.2.1.ga62cf7e
-		 */
 		.type = IBV_EXP_FLOW_ATTR_ALL_DEFAULT,
 		.num_of_specs = 0,
 		.port = rxq->priv->port,
