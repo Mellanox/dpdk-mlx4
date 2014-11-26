@@ -101,7 +101,11 @@
 #define DATA_OFF(m) (m)->data_off
 #define SET_DATA_OFF(m, o) ((m)->data_off = (o))
 #define NB_SEGS(m) (m)->nb_segs
+#ifdef HAVE_STRUCT_RTE_MBUF_IN_PORT
 #define IN_PORT(m) (m)->in_port
+#else
+#define IN_PORT(m) (m)->port
+#endif
 #endif
 
 /* Work Request ID data type (64 bit). */

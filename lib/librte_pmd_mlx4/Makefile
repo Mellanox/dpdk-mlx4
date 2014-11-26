@@ -91,6 +91,10 @@ config.h: comp_check.sh
 		CFLAGS="$(CFLAGS)" sh -- $< \
 		$@ HAVE_FLOW_CTRL_GET \
 		rte_ethdev.h field 'struct eth_dev_ops.flow_ctrl_get'
+	$Q CC="$(CC)" \
+		CFLAGS="$(CFLAGS)" sh -- $< \
+		$@ HAVE_STRUCT_RTE_MBUF_IN_PORT \
+		rte_mbuf.h field 'struct rte_mbuf.in_port'
 
 $(OBJ): $(SRC) $(HDR) config.h
 
