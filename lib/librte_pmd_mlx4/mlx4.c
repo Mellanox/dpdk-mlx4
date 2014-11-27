@@ -156,19 +156,6 @@ struct mlx4_txq_stats {
 	uint64_t odropped; /**< Total of packets not sent when TX ring full. */
 };
 
-/* Helper to get the size of a memory pool. */
-static size_t mp_total_size(struct rte_mempool *mp)
-{
-	size_t ret;
-
-	/* The same calculation is used in rte_mempool_create(). */
-	ret = (mp->header_size + mp->elt_size + mp->trailer_size);
-	ret *= mp->size;
-	ret += sizeof(*mp);
-	ret += mp->private_data_size;
-	return ret;
-}
-
 /* RX element (scattered packets). */
 struct rxq_elt_sp {
 	struct ibv_recv_wr wr; /* Work Request. */
@@ -187,7 +174,6 @@ struct rxq_elt {
 struct rxq {
 	struct priv *priv; /* Back pointer to private data. */
 	struct rte_mempool *mp; /* Memory Pool for allocations. */
-	size_t mp_size; /* mp size in bytes. */
 	struct ibv_mr *mr; /* Memory Region (for mp). */
 	struct ibv_cq *cq; /* Completion Queue. */
 	struct ibv_qp *qp; /* Queue Pair. */
@@ -231,7 +217,6 @@ struct txq {
 	struct priv *priv; /* Back pointer to private data. */
 	struct {
 		struct rte_mempool *mp; /* Cached Memory Pool. */
-		size_t mp_size; /* mp size in bytes. */
 		struct ibv_mr *mr; /* Memory Region (for mp). */
 		uint32_t lkey; /* mr->lkey */
 	} mp2mr[MLX4_PMD_TX_MP_CACHE]; /* MP to MR translation table. */
@@ -765,7 +750,6 @@ static uint32_t
 txq_mp2mr(struct txq *txq, struct rte_mempool *mp)
 {
 	unsigned int i;
-	size_t mp_size;
 	struct ibv_mr *mr;
 
 	for (i = 0; (i != elemof(txq->mp2mr)); ++i) {
@@ -776,14 +760,14 @@ txq_mp2mr(struct txq *txq, struct rte_mempool *mp)
 		if (txq->mp2mr[i].mp == mp) {
 			assert(txq->mp2mr[i].lkey != (uint32_t)-1);
 			assert(txq->mp2mr[i].mr->lkey == txq->mp2mr[i].lkey);
-			assert(txq->mp2mr[i].mp_size != 0);
 			return txq->mp2mr[i].lkey;
 		}
 	}
 	/* Add a new entry, register MR first. */
 	DEBUG("%p: discovered new memory pool %p", (void *)txq, (void *)mp);
-	mp_size = mp_total_size(mp);
-	mr = ibv_reg_mr(txq->priv->pd, mp, mp_size,
+	mr = ibv_reg_mr(txq->priv->pd,
+		        (void *)mp->elt_va_start,
+		        (mp->elt_va_end - mp->elt_va_start),
 			(IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE));
 	if (unlikely(mr == NULL)) {
 		DEBUG("%p: unable to configure MR, ibv_reg_mr() failed.",
@@ -801,7 +785,6 @@ txq_mp2mr(struct txq *txq, struct rte_mempool *mp)
 	}
 	/* Store the new entry. */
 	txq->mp2mr[i].mp = mp;
-	txq->mp2mr[i].mp_size = mp_size;
 	txq->mp2mr[i].mr = mr;
 	txq->mp2mr[i].lkey = mr->lkey;
 	DEBUG("%p: new MR lkey for MP %p: 0x%08" PRIu32,
@@ -2551,10 +2534,10 @@ rxq_setup(struct rte_eth_dev *dev, struct rxq *rxq, uint16_t desc,
 	}
 	DEBUG("%p: %s scattered packets support (%u WRs)",
 	      (void *)dev, (tmpl.sp ? "enabling" : "disabling"), desc);
-	/* Get mempool size. */
-	tmpl.mp_size = mp_total_size(mp);
 	/* Use the entire RX mempool as the memory region. */
-	tmpl.mr = ibv_reg_mr(priv->pd, mp, tmpl.mp_size,
+	tmpl.mr = ibv_reg_mr(priv->pd,
+		             (void *)mp->elt_va_start,
+			     (mp->elt_va_end - mp->elt_va_start),
 			     (IBV_ACCESS_LOCAL_WRITE |
 			      IBV_ACCESS_REMOTE_WRITE));
 	if (tmpl.mr == NULL) {
