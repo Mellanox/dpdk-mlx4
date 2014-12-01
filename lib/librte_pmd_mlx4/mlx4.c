@@ -1222,10 +1222,10 @@ mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	else {
 		txq = rte_calloc_socket("TXQ", 1, sizeof(*txq), 0, socket);
 		if (txq == NULL) {
-			ERROR("%p: unable to allocate queue index %u: %s",
-			      (void *)dev, idx, strerror(errno));
+			ERROR("%p: unable to allocate queue index %u",
+			      (void *)dev, idx);
 			priv_unlock(priv);
-			return -errno;
+			return -ENOMEM;
 		}
 	}
 	ret = txq_setup(dev, txq, desc, socket, conf);
@@ -2673,10 +2673,10 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	else {
 		rxq = rte_calloc_socket("RXQ", 1, sizeof(*rxq), 0, socket);
 		if (rxq == NULL) {
-			ERROR("%p: unable to allocate queue index %u: %s",
-			      (void *)dev, idx, strerror(errno));
+			ERROR("%p: unable to allocate queue index %u",
+			      (void *)dev, idx);
 			priv_unlock(priv);
-			return -errno;
+			return -ENOMEM;
 		}
 	}
 	ret = rxq_setup(dev, rxq, desc, socket, conf, mp);
