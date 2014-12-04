@@ -279,12 +279,25 @@ struct priv {
 	rte_spinlock_t lock; /* Lock for control functions. */
 };
 
+/**
+ * Lock private structure to protect it from concurrent access in the
+ * control path.
+ *
+ * @param priv
+ *   Pointer to private structure.
+ */
 static void
 priv_lock(struct priv *priv)
 {
 	rte_spinlock_lock(&priv->lock);
 }
 
+/**
+ * Unlock private structure.
+ *
+ * @param priv
+ *   Pointer to private structure.
+ */
 static void
 priv_unlock(struct priv *priv)
 {
@@ -297,7 +310,17 @@ priv_unlock(struct priv *priv)
 	\
 	snprintf(name, sizeof(name), __VA_ARGS__)
 
-/* Get interface name from priv. */
+/**
+ * Get interface name from private structure.
+ *
+ * @param[in] priv
+ *   Pointer to private structure.
+ * @param[out] ifname
+ *   Interface name output buffer.
+ *
+ * @return
+ *   0 on success, -1 on failure and errno is set.
+ */
 static int
 priv_get_ifname(const struct priv *priv, char (*ifname)[IF_NAMESIZE])
 {
@@ -341,7 +364,21 @@ priv_get_ifname(const struct priv *priv, char (*ifname)[IF_NAMESIZE])
 	return ret;
 }
 
-/* Read from sysfs entry. */
+/**
+ * Read from sysfs entry.
+ *
+ * @param[in] priv
+ *   Pointer to private structure.
+ * @param[in] entry
+ *   Entry name relative to sysfs path.
+ * @param[out] buf
+ *   Data output buffer.
+ * @param size
+ *   Buffer size.
+ *
+ * @return
+ *   0 on success, -1 on failure and errno is set.
+ */
 static int
 priv_sysfs_read(const struct priv *priv, const char *entry,
 		char *buf, size_t size)
@@ -371,7 +408,21 @@ priv_sysfs_read(const struct priv *priv, const char *entry,
 	return ret;
 }
 
-/* Write to sysfs entry. */
+/**
+ * Write to sysfs entry.
+ *
+ * @param[in] priv
+ *   Pointer to private structure.
+ * @param[in] entry
+ *   Entry name relative to sysfs path.
+ * @param[in] buf
+ *   Data buffer.
+ * @param size
+ *   Buffer size.
+ *
+ * @return
+ *   0 on success, -1 on failure and errno is set.
+ */
 static int
 priv_sysfs_write(const struct priv *priv, const char *entry,
 		 char *buf, size_t size)
@@ -401,7 +452,19 @@ priv_sysfs_write(const struct priv *priv, const char *entry,
 	return ret;
 }
 
-/* Get unsigned long sysfs property. */
+/**
+ * Get unsigned long sysfs property.
+ *
+ * @param priv
+ *   Pointer to private structure.
+ * @param[in] name
+ *   Entry name relative to sysfs path.
+ * @param[out] value
+ *   Value output buffer.
+ *
+ * @return
+ *   0 on success, -1 on failure and errno is set.
+ */
 static int
 priv_get_sysfs_ulong(struct priv *priv, const char *name, unsigned long *value)
 {
@@ -427,7 +490,19 @@ priv_get_sysfs_ulong(struct priv *priv, const char *name, unsigned long *value)
 	return 0;
 }
 
-/* Set unsigned long sysfs property. */
+/**
+ * Set unsigned long sysfs property.
+ *
+ * @param priv
+ *   Pointer to private structure.
+ * @param[in] name
+ *   Entry name relative to sysfs path.
+ * @param value
+ *   Value to set.
+ *
+ * @return
+ *   0 on success, -1 on failure and errno is set.
+ */
 static int
 priv_set_sysfs_ulong(struct priv *priv, const char *name, unsigned long value)
 {
@@ -443,7 +518,19 @@ priv_set_sysfs_ulong(struct priv *priv, const char *name, unsigned long value)
 	return 0;
 }
 
-/* Perform ifreq ioctl() on associated Ethernet device. */
+/**
+ * Perform ifreq ioctl() on associated Ethernet device.
+ *
+ * @param[in] priv
+ *   Pointer to private structure.
+ * @param req
+ *   Request number to pass to ioctl().
+ * @param[out] ifr
+ *   Interface request structure output buffer.
+ *
+ * @return
+ *   0 on success, -1 on failure and errno is set.
+ */
 static int
 priv_ifreq(const struct priv *priv, int req, struct ifreq *ifr)
 {
@@ -458,7 +545,17 @@ priv_ifreq(const struct priv *priv, int req, struct ifreq *ifr)
 	return ret;
 }
 
-/* Get device MTU. */
+/**
+ * Get device MTU.
+ *
+ * @param priv
+ *   Pointer to private structure.
+ * @param[out] mtu
+ *   MTU value output buffer.
+ *
+ * @return
+ *   0 on success, -1 on failure and errno is set.
+ */
 static int
 priv_get_mtu(struct priv *priv, uint16_t *mtu)
 {
@@ -472,7 +569,17 @@ priv_get_mtu(struct priv *priv, uint16_t *mtu)
 
 #ifdef HAVE_MTU_SET
 
-/* Set device MTU. */
+/**
+ * Set device MTU.
+ *
+ * @param priv
+ *   Pointer to private structure.
+ * @param mtu
+ *   MTU value to set.
+ *
+ * @return
+ *   0 on success, -1 on failure and errno is set.
+ */
 static int
 priv_set_mtu(struct priv *priv, uint16_t mtu)
 {
@@ -481,7 +588,19 @@ priv_set_mtu(struct priv *priv, uint16_t mtu)
 
 #endif /* HAVE_MTU_SET */
 
-/* Set device flags. */
+/**
+ * Set device flags.
+ *
+ * @param priv
+ *   Pointer to private structure.
+ * @param keep
+ *   Bitmask for flags that must remain untouched.
+ * @param flags
+ *   Bitmask for flags to modify.
+ *
+ * @return
+ *   0 on success, -1 on failure and errno is set.
+ */
 static int
 priv_set_flags(struct priv *priv, unsigned int keep, unsigned int flags)
 {
@@ -504,6 +623,18 @@ rxq_setup(struct rte_eth_dev *dev, struct rxq *rxq, uint16_t desc,
 static void
 rxq_cleanup(struct rxq *rxq);
 
+/**
+ * Ethernet device configuration.
+ *
+ * Prepare the driver for a given number of TX and RX queues.
+ * Allocate parent RSS queue when several RX queues are requested.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ *
+ * @return
+ *   0 on success, errno value on failure.
+ */
 static int
 dev_configure(struct rte_eth_dev *dev)
 {
@@ -531,7 +662,7 @@ dev_configure(struct rte_eth_dev *dev)
 		/* Only if there are no remaining child RX queues. */
 		for (i = 0; (i != priv->rxqs_n); ++i)
 			if ((*priv->rxqs)[i] != NULL)
-				return -EINVAL;
+				return EINVAL;
 		rxq_cleanup(&priv->rxq_parent);
 		priv->rss = 0;
 		priv->rxqs_n = 0;
@@ -546,13 +677,13 @@ dev_configure(struct rte_eth_dev *dev)
 		ERROR("%p: only a single RX queue can be configured when"
 		      " hardware doesn't support RSS",
 		      (void *)dev);
-		return -EINVAL;
+		return EINVAL;
 	}
 	/* Fail if hardware doesn't support that many RSS queues. */
 	if (rxqs_n >= priv->max_rss_tbl_sz) {
 		ERROR("%p: only %u RX queues can be configured for RSS",
 		      (void *)dev, priv->max_rss_tbl_sz);
-		return -EINVAL;
+		return EINVAL;
 	}
 	priv->rss = 1;
 	tmp = priv->rxqs_n;
@@ -563,9 +694,19 @@ dev_configure(struct rte_eth_dev *dev)
 	/* Failure, rollback. */
 	priv->rss = 0;
 	priv->rxqs_n = tmp;
+	assert(ret > 0);
 	return ret;
 }
 
+/**
+ * DPDK callback for Ethernet device configuration.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ *
+ * @return
+ *   0 on success, negative errno value on failure.
+ */
 static int
 mlx4_dev_configure(struct rte_eth_dev *dev)
 {
@@ -574,12 +715,24 @@ mlx4_dev_configure(struct rte_eth_dev *dev)
 
 	priv_lock(priv);
 	ret = dev_configure(dev);
+	assert(ret >= 0);
 	priv_unlock(priv);
-	return ret;
+	return -ret;
 }
 
 /* TX queues handling. */
 
+/**
+ * Allocate TX queue elements.
+ *
+ * @param txq
+ *   Pointer to TX queue structure.
+ * @param elts_n
+ *   Number of elements to allocate.
+ *
+ * @return
+ *   0 on success, errno value on failure.
+ */
 static int
 txq_alloc_elts(struct txq *txq, unsigned int elts_n)
 {
@@ -634,10 +787,16 @@ error:
 	if (elts != NULL)
 		rte_free(elts);
 	DEBUG("%p: failed, freed everything", (void *)txq);
-	assert(ret != 0);
+	assert(ret > 0);
 	return ret;
 }
 
+/**
+ * Free TX queue elements.
+ *
+ * @param txq
+ *   Pointer to TX queue structure.
+ */
 static void
 txq_free_elts(struct txq *txq)
 {
@@ -669,6 +828,15 @@ txq_free_elts(struct txq *txq)
 	rte_free(elts);
 }
 
+
+/**
+ * Clean up a TX queue.
+ *
+ * Destroy objects, free allocated memory and reset the structure for reuse.
+ *
+ * @param txq
+ *   Pointer to TX queue structure.
+ */
 static void
 txq_cleanup(struct txq *txq)
 {
@@ -689,13 +857,19 @@ txq_cleanup(struct txq *txq)
 	memset(txq, 0, sizeof(*txq));
 }
 
-/*
+/**
  * Manage TX completions.
  *
  * When sending a burst, mlx4_tx_burst() posts several WRs.
  * To improve performance, a completion event is only required for the last of
  * them. Doing so discards completion information for other WRs, but this
  * information would not be used anyway.
+ *
+ * @param txq
+ *   Pointer to TX queue structure.
+ *
+ * @return
+ *   0 on success, -1 on failure.
  */
 static int
 txq_complete(struct txq *txq)
@@ -716,7 +890,7 @@ txq_complete(struct txq *txq)
 	if (unlikely(wcs_n == 0))
 		return 0;
 	if (unlikely(wcs_n < 0)) {
-		DEBUG("%p: ibv_poll_cq() failed (wc_n=%d)",
+		DEBUG("%p: ibv_poll_cq() failed (wcs_n=%d)",
 		      (void *)txq, wcs_n);
 		return -1;
 	}
@@ -739,12 +913,18 @@ txq_complete(struct txq *txq)
 	return 0;
 }
 
-/*
+/**
  * Get Memory Region (MR) <-> Memory Pool (MP) association from txq->mp2mr[].
  * Add MP to txq->mp2mr[] if it's not registered yet. If mp2mr[] is full,
  * remove an entry first.
  *
- * Return mr->lkey on success, (uint32_t)-1 on failure.
+ * @param txq
+ *   Pointer to TX queue structure.
+ * @param[in] mp
+ *   Memory Pool for which a Memory Region lkey must be returned.
+ *
+ * @return
+ *   mr->lkey on success, (uint32_t)-1 on failure.
  */
 static uint32_t
 txq_mp2mr(struct txq *txq, struct rte_mempool *mp)
@@ -792,6 +972,17 @@ txq_mp2mr(struct txq *txq, struct rte_mempool *mp)
 	return txq->mp2mr[i].lkey;
 }
 
+/**
+ * Copy scattered mbuf contents to a single linear buffer.
+ *
+ * @param[out] linear
+ *   Linear output buffer.
+ * @param[in] buf
+ *   Scattered input buffer.
+ *
+ * @return
+ *   Number of bytes copied to the output buffer or 0 if not large enough.
+ */
 static unsigned int
 linearize_mbuf(linear_t *linear, struct rte_mbuf *buf)
 {
@@ -814,6 +1005,19 @@ linearize_mbuf(linear_t *linear, struct rte_mbuf *buf)
 	return size;
 }
 
+/**
+ * DPDK callback for TX.
+ *
+ * @param dpdk_txq
+ *   Generic pointer to TX queue structure.
+ * @param[in] pkts
+ *   Packets to transmit.
+ * @param pkts_n
+ *   Number of packets in array.
+ *
+ * @return
+ *   Number of packets successfully transmitted (<= pkts_n).
+ */
 static uint16_t
 mlx4_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 {
@@ -1079,6 +1283,23 @@ stop:
 	return i;
 }
 
+/**
+ * Configure a TX queue.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ * @param txq
+ *   Pointer to TX queue structure.
+ * @param desc
+ *   Number of descriptors to configure in queue.
+ * @param socket
+ *   NUMA socket on which memory must be allocated.
+ * @param[in] conf
+ *   Thresholds parameters.
+ *
+ * @return
+ *   0 on success, errno value on failure.
+ */
 static int
 txq_setup(struct rte_eth_dev *dev, struct txq *txq, uint16_t desc,
 	  unsigned int socket, const struct rte_eth_txconf *conf)
@@ -1098,7 +1319,7 @@ txq_setup(struct rte_eth_dev *dev, struct txq *txq, uint16_t desc,
 	if ((desc == 0) || (desc % MLX4_PMD_SGE_WR_N)) {
 		ERROR("%p: invalid number of TX descriptors (must be a"
 		      " multiple of %d)", (void *)dev, desc);
-		return -EINVAL;
+		return EINVAL;
 	}
 	desc /= MLX4_PMD_SGE_WR_N;
 	/* MRs will be registered in mp2mr[] later. */
@@ -1139,7 +1360,7 @@ txq_setup(struct rte_eth_dev *dev, struct txq *txq, uint16_t desc,
 	};
 	tmpl.qp = ibv_create_qp(priv->pd, &attr.init);
 	if (tmpl.qp == NULL) {
-		ret = errno;
+		ret = (errno ? errno : EINVAL);
 		ERROR("%p: QP creation failure: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
@@ -1188,10 +1409,27 @@ txq_setup(struct rte_eth_dev *dev, struct txq *txq, uint16_t desc,
 	return 0;
 error:
 	txq_cleanup(&tmpl);
-	assert(ret != 0);
-	return -ret; /* Negative errno value. */
+	assert(ret > 0);
+	return ret;
 }
 
+/**
+ * DPDK callback to configure a TX queue.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ * @param idx
+ *   TX queue index.
+ * @param desc
+ *   Number of descriptors to configure in queue.
+ * @param socket
+ *   NUMA socket on which memory must be allocated.
+ * @param[in] conf
+ *   Thresholds parameters.
+ *
+ * @return
+ *   0 on success, negative errno value on failure.
+ */
 static int
 mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		    unsigned int socket, const struct rte_eth_txconf *conf)
@@ -1240,9 +1478,15 @@ mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		dev->tx_pkt_burst = mlx4_tx_burst;
 	}
 	priv_unlock(priv);
-	return ret;
+	return -ret;
 }
 
+/**
+ * DPDK callback to release a TX queue.
+ *
+ * @param dpdk_txq
+ *   Generic TX queue pointer.
+ */
 static void
 mlx4_tx_queue_release(void *dpdk_txq)
 {
@@ -1268,6 +1512,20 @@ mlx4_tx_queue_release(void *dpdk_txq)
 
 /* RX queues handling. */
 
+/**
+ * Allocate RX queue elements with scattered packets support.
+ *
+ * @param rxq
+ *   Pointer to RX queue structure.
+ * @param elts_n
+ *   Number of elements to allocate.
+ * @param[in] pool
+ *   If not NULL, fetch buffers from this array instead of allocating them
+ *   with rte_pktmbuf_alloc().
+ *
+ * @return
+ *   0 on success, errno value on failure.
+ */
 static int
 rxq_alloc_elts_sp(struct rxq *rxq, unsigned int elts_n,
 		  struct rte_mbuf **pool)
@@ -1367,10 +1625,16 @@ error:
 		rte_free(elts);
 	}
 	DEBUG("%p: failed, freed everything", (void *)rxq);
-	assert(ret != 0);
+	assert(ret > 0);
 	return ret;
 }
 
+/**
+ * Free RX queue elements with scattered packets support.
+ *
+ * @param rxq
+ *   Pointer to RX queue structure.
+ */
 static void
 rxq_free_elts_sp(struct rxq *rxq)
 {
@@ -1397,6 +1661,20 @@ rxq_free_elts_sp(struct rxq *rxq)
 	rte_free(elts);
 }
 
+/**
+ * Allocate RX queue elements.
+ *
+ * @param rxq
+ *   Pointer to RX queue structure.
+ * @param elts_n
+ *   Number of elements to allocate.
+ * @param[in] pool
+ *   If not NULL, fetch buffers from this array instead of allocating them
+ *   with rte_pktmbuf_alloc().
+ *
+ * @return
+ *   0 on success, errno value on failure.
+ */
 static int
 rxq_alloc_elts(struct rxq *rxq, unsigned int elts_n, struct rte_mbuf **pool)
 {
@@ -1492,10 +1770,16 @@ error:
 		rte_free(elts);
 	}
 	DEBUG("%p: failed, freed everything", (void *)rxq);
-	assert(ret != 0);
+	assert(ret > 0);
 	return ret;
 }
 
+/**
+ * Free RX queue elements.
+ *
+ * @param rxq
+ *   Pointer to RX queue structure.
+ */
 static void
 rxq_free_elts(struct rxq *rxq)
 {
@@ -1521,6 +1805,14 @@ rxq_free_elts(struct rxq *rxq)
 	rte_free(elts);
 }
 
+/**
+ * Unregister a MAC address from a RX queue.
+ *
+ * @param rxq
+ *   Pointer to RX queue structure.
+ * @param mac_index
+ *   MAC address index.
+ */
 static void
 rxq_mac_addr_del(struct rxq *rxq, unsigned int mac_index)
 {
@@ -1557,6 +1849,12 @@ rxq_mac_addr_del(struct rxq *rxq, unsigned int mac_index)
 	BITFIELD_RESET(rxq->mac_configured, mac_index);
 }
 
+/**
+ * Unregister all MAC addresses from a RX queue.
+ *
+ * @param rxq
+ *   Pointer to RX queue structure.
+ */
 static void
 rxq_mac_addrs_del(struct rxq *rxq)
 {
@@ -1570,6 +1868,17 @@ rxq_mac_addrs_del(struct rxq *rxq)
 static int rxq_promiscuous_enable(struct rxq *);
 static void rxq_promiscuous_disable(struct rxq *);
 
+/**
+ * Register a MAC address in a RX queue.
+ *
+ * @param rxq
+ *   Pointer to RX queue structure.
+ * @param mac_index
+ *   MAC address index to register.
+ *
+ * @return
+ *   0 on success, errno value on failure.
+ */
 static int
 rxq_mac_addr_add(struct rxq *rxq, unsigned int mac_index)
 {
@@ -1695,6 +2004,15 @@ rxq_mac_addr_add(struct rxq *rxq, unsigned int mac_index)
 	return 0;
 }
 
+/**
+ * Register all MAC addresses in a RX queue.
+ *
+ * @param rxq
+ *   Pointer to RX queue structure.
+ *
+ * @return
+ *   0 on success, errno value on failure.
+ */
 static int
 rxq_mac_addrs_add(struct rxq *rxq)
 {
@@ -1711,11 +2029,23 @@ rxq_mac_addrs_add(struct rxq *rxq)
 		/* Failure, rollback. */
 		while (i != 0)
 			rxq_mac_addr_del(rxq, --i);
+		assert(ret > 0);
 		return ret;
 	}
 	return 0;
 }
 
+/**
+ * Unregister a MAC address.
+ *
+ * In RSS mode, the MAC address is unregistered from the parent queue,
+ * otherwise it is unregistered from each queue directly.
+ *
+ * @param priv
+ *   Pointer to private structure.
+ * @param mac_index
+ *   MAC address index.
+ */
 static void
 priv_mac_addr_del(struct priv *priv, unsigned int mac_index)
 {
@@ -1734,6 +2064,22 @@ end:
 	BITFIELD_RESET(priv->mac_configured, mac_index);
 }
 
+/**
+ * Register a MAC address.
+ *
+ * In RSS mode, the MAC address is registered in the parent queue,
+ * otherwise it is registered in each queue directly.
+ *
+ * @param priv
+ *   Pointer to private structure.
+ * @param mac_index
+ *   MAC address index to use.
+ * @param mac
+ *   MAC address to register.
+ *
+ * @return
+ *   0 on success, errno value on failure.
+ */
 static int
 priv_mac_addr_add(struct priv *priv, unsigned int mac_index,
 		  const uint8_t (*mac)[ETHER_ADDR_LEN])
@@ -1798,6 +2144,15 @@ end:
 	return 0;
 }
 
+/**
+ * Enable allmulti mode in a RX queue.
+ *
+ * @param rxq
+ *   Pointer to RX queue structure.
+ *
+ * @return
+ *   0 on success, errno value on failure.
+ */
 static int
 rxq_allmulticast_enable(struct rxq *rxq)
 {
@@ -1834,6 +2189,12 @@ rxq_allmulticast_enable(struct rxq *rxq)
 	return 0;
 }
 
+/**
+ * Disable allmulti mode in a RX queue.
+ *
+ * @param rxq
+ *   Pointer to RX queue structure.
+ */
 static void
 rxq_allmulticast_disable(struct rxq *rxq)
 {
@@ -1852,6 +2213,15 @@ rxq_allmulticast_disable(struct rxq *rxq)
 	DEBUG("%p: allmulticast mode disabled", (void *)rxq);
 }
 
+/**
+ * Enable promiscuous mode in a RX queue.
+ *
+ * @param rxq
+ *   Pointer to RX queue structure.
+ *
+ * @return
+ *   0 on success, errno value on failure.
+ */
 static int
 rxq_promiscuous_enable(struct rxq *rxq)
 {
@@ -1888,6 +2258,12 @@ rxq_promiscuous_enable(struct rxq *rxq)
 	return 0;
 }
 
+/**
+ * Disable promiscuous mode in a RX queue.
+ *
+ * @param rxq
+ *   Pointer to RX queue structure.
+ */
 static void
 rxq_promiscuous_disable(struct rxq *rxq)
 {
@@ -1906,6 +2282,14 @@ rxq_promiscuous_disable(struct rxq *rxq)
 	DEBUG("%p: promiscuous mode disabled", (void *)rxq);
 }
 
+/**
+ * Clean up a RX queue.
+ *
+ * Destroy objects, free allocated memory and reset the structure for reuse.
+ *
+ * @param rxq
+ *   Pointer to RX queue structure.
+ */
 static void
 rxq_cleanup(struct rxq *rxq)
 {
@@ -1930,6 +2314,19 @@ rxq_cleanup(struct rxq *rxq)
 static uint16_t
 mlx4_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n);
 
+/**
+ * DPDK callback for RX with scattered packets support.
+ *
+ * @param dpdk_rxq
+ *   Generic pointer to RX queue structure.
+ * @param[out] pkts
+ *   Array to store received packets.
+ * @param pkts_n
+ *   Maximum number of packets in array.
+ *
+ * @return
+ *   Number of packets successfully received (<= pkts_n).
+ */
 static uint16_t
 mlx4_rx_burst_sp(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 {
@@ -1953,7 +2350,7 @@ mlx4_rx_burst_sp(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	if (unlikely(wcs_n < 0)) {
 		DEBUG("rxq=%p, ibv_poll_cq() failed (wc_n=%d)",
 		      (void *)rxq, wcs_n);
-		return -1;
+		return 0;
 	}
 	assert(wcs_n <= (int)pkts_n);
 	/* For each work completion. */
@@ -2105,10 +2502,22 @@ mlx4_rx_burst_sp(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	return ret;
 }
 
-/*
+/**
+ * DPDK callback for RX.
+ *
  * The following function is the same as mlx4_rx_burst_sp(), except it doesn't
  * manage scattered packets. Improves performance when MRU is lower than the
  * size of the first segment.
+ *
+ * @param dpdk_rxq
+ *   Generic pointer to RX queue structure.
+ * @param[out] pkts
+ *   Array to store received packets.
+ * @param pkts_n
+ *   Maximum number of packets in array.
+ *
+ * @return
+ *   Number of packets successfully received (<= pkts_n).
  */
 static uint16_t
 mlx4_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
@@ -2131,7 +2540,7 @@ mlx4_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	if (unlikely(wcs_n < 0)) {
 		DEBUG("rxq=%p, ibv_poll_cq() failed (wc_n=%d)",
 		      (void *)rxq, wcs_n);
-		return -1;
+		return 0;
 	}
 	assert(wcs_n <= (int)pkts_n);
 	/* For each work completion. */
@@ -2234,6 +2643,19 @@ mlx4_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	return ret;
 }
 
+/**
+ * Allocate a Queue Pair.
+ *
+ * @param priv
+ *   Pointer to private structure.
+ * @param cq
+ *   Completion queue to associate with QP.
+ * @param desc
+ *   Number of descriptors in QP (hint only).
+ *
+ * @return
+ *   QP pointer or NULL in case of error.
+ */
 static struct ibv_qp *
 rxq_setup_qp(struct priv *priv, struct ibv_cq *cq, uint16_t desc)
 {
@@ -2261,6 +2683,21 @@ rxq_setup_qp(struct priv *priv, struct ibv_cq *cq, uint16_t desc)
 
 #if RSS_SUPPORT
 
+/**
+ * Allocate a RSS Queue Pair.
+ *
+ * @param priv
+ *   Pointer to private structure.
+ * @param cq
+ *   Completion queue to associate with QP.
+ * @param desc
+ *   Number of descriptors in QP (hint only).
+ * @param parent
+ *   If nonzero, create a parent QP, otherwise a child.
+ *
+ * @return
+ *   QP pointer or NULL in case of error.
+ */
 static struct ibv_qp *
 rxq_setup_qp_rss(struct priv *priv, struct ibv_cq *cq, uint16_t desc,
 		 int parent)
@@ -2306,10 +2743,20 @@ rxq_setup_qp_rss(struct priv *priv, struct ibv_cq *cq, uint16_t desc,
 
 #ifdef HAVE_MTU_SET
 
-/*
+/**
+ * Reconfigure a RX queue with new parameters.
+ *
  * rxq_rehash() does not allocate mbufs, which, if not done from the right
  * thread (such as a control thread), may corrupt the pool.
  * In case of failure, the queue is left untouched.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ * @param rxq
+ *   RX queue pointer.
+ *
+ * @return
+ *   0 on success, errno value on failure.
  */
 static int
 rxq_rehash(struct rte_eth_dev *dev, struct rxq *rxq)
@@ -2328,7 +2775,7 @@ rxq_rehash(struct rte_eth_dev *dev, struct rxq *rxq)
 	if (parent) {
 		ERROR("%p: cannot rehash parent queue %p",
 		      (void *)dev, (void *)rxq);
-		return -EINVAL;
+		return EINVAL;
 	}
 	DEBUG("%p: rehashing queue %p", (void *)dev, (void *)rxq);
 	/* Number of descriptors and mbufs currently allocated. */
@@ -2367,11 +2814,13 @@ rxq_rehash(struct rte_eth_dev *dev, struct rxq *rxq)
 	mod = (struct ibv_exp_qp_attr){ .qp_state = IBV_QPS_RESET };
 	if ((err = ibv_exp_modify_qp(tmpl.qp, &mod, IBV_EXP_QP_STATE))) {
 		ERROR("%p: cannot reset QP: %s", (void *)dev, strerror(err));
-		return -err;
+		assert(err > 0);
+		return err;
 	}
 	if ((err = ibv_resize_cq(tmpl.cq, desc_n))) {
 		ERROR("%p: cannot resize CQ: %s", (void *)dev, strerror(err));
-		return -err;
+		assert(err > 0);
+		return err;
 	}
 	mod = (struct ibv_exp_qp_attr){
 		/* Move the QP to this state. */
@@ -2387,7 +2836,8 @@ rxq_rehash(struct rte_eth_dev *dev, struct rxq *rxq)
 				  IBV_EXP_QP_PORT)))) {
 		ERROR("%p: QP state to IBV_QPS_INIT failed: %s",
 		      (void *)dev, strerror(err));
-		return -err;
+		assert(err > 0);
+		return err;
 	};
 	/* Reconfigure flows. Do not care for errors. */
 	if (!priv->rss) {
@@ -2407,7 +2857,7 @@ rxq_rehash(struct rte_eth_dev *dev, struct rxq *rxq)
 	pool = rte_malloc(__func__, (mbuf_n * sizeof(*pool)), 0);
 	if (pool == NULL) {
 		ERROR("%p: cannot allocate memory", (void *)dev);
-		return -ENOBUFS;
+		return ENOBUFS;
 	}
 	/* Snatch mbufs from original queue. */
 	k = 0;
@@ -2446,7 +2896,8 @@ rxq_rehash(struct rte_eth_dev *dev, struct rxq *rxq)
 	if (err) {
 		ERROR("%p: cannot reallocate WRs, aborting", (void *)dev);
 		rte_free(pool);
-		return -err;
+		assert(err > 0);
+		return err;
 	}
 	assert(tmpl.elts_n == desc_n);
 	assert(tmpl.elts.sp != NULL);
@@ -2475,11 +2926,31 @@ rxq_rehash(struct rte_eth_dev *dev, struct rxq *rxq)
 		      (void *)dev, strerror(err));
 skip_rtr:
 	*rxq = tmpl;
+	assert(err >= 0);
 	return err;
 }
 
 #endif /* HAVE_MTU_SET */
 
+/**
+ * Configure a RX queue.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ * @param rxq
+ *   Pointer to RX queue structure.
+ * @param desc
+ *   Number of descriptors to configure in queue.
+ * @param socket
+ *   NUMA socket on which memory must be allocated.
+ * @param[in] conf
+ *   Thresholds parameters.
+ * @param mp
+ *   Memory pool for buffer allocations.
+ *
+ * @return
+ *   0 on success, errno value on failure.
+ */
 static int
 rxq_setup(struct rte_eth_dev *dev, struct rxq *rxq, uint16_t desc,
 	  unsigned int socket, const struct rte_eth_rxconf *conf,
@@ -2512,13 +2983,13 @@ rxq_setup(struct rte_eth_dev *dev, struct rxq *rxq, uint16_t desc,
 	if ((desc == 0) || (desc % MLX4_PMD_SGE_WR_N)) {
 		ERROR("%p: invalid number of RX descriptors (must be a"
 		      " multiple of %d)", (void *)dev, desc);
-		return -EINVAL;
+		return EINVAL;
 	}
 	/* Get mbuf length. */
 	buf = rte_pktmbuf_alloc(mp);
 	if (buf == NULL) {
 		ERROR("%p: unable to allocate mbuf", (void *)dev);
-		return -ENOMEM;
+		return ENOMEM;
 	}
 	tmpl.mb_len = buf->buf_len;
 	assert((rte_pktmbuf_headroom(buf) +
@@ -2565,7 +3036,7 @@ skip_mr:
 #endif /* RSS_SUPPORT */
 		tmpl.qp = rxq_setup_qp(priv, tmpl.cq, desc);
 	if (tmpl.qp == NULL) {
-		ret = errno;
+		ret = (errno ? errno : EINVAL);
 		ERROR("%p: QP creation failure: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
@@ -2638,10 +3109,29 @@ skip_alloc:
 	return 0;
 error:
 	rxq_cleanup(&tmpl);
-	assert(ret != 0);
-	return -ret; /* Negative errno value. */
+	assert(ret > 0);
+	return ret;
 }
 
+/**
+ * DPDK callback to configure a RX queue.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ * @param idx
+ *   RX queue index.
+ * @param desc
+ *   Number of descriptors to configure in queue.
+ * @param socket
+ *   NUMA socket on which memory must be allocated.
+ * @param[in] conf
+ *   Thresholds parameters.
+ * @param mp
+ *   Memory pool for buffer allocations.
+ *
+ * @return
+ *   0 on success, negative errno value on failure.
+ */
 static int
 mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		    unsigned int socket, const struct rte_eth_rxconf *conf,
@@ -2694,9 +3184,15 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 			dev->rx_pkt_burst = mlx4_rx_burst;
 	}
 	priv_unlock(priv);
-	return ret;
+	return -ret;
 }
 
+/**
+ * DPDK callback to release a RX queue.
+ *
+ * @param dpdk_rxq
+ *   Generic RX queue pointer.
+ */
 static void
 mlx4_rx_queue_release(void *dpdk_rxq)
 {
@@ -2721,7 +3217,17 @@ mlx4_rx_queue_release(void *dpdk_rxq)
 	priv_unlock(priv);
 }
 
-/* Simulate device start by attaching all configured flows. */
+/**
+ * DPDK callback to start the device.
+ *
+ * Simulate device start by attaching all configured flows.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ *
+ * @return
+ *   0 on success, negative errno value on failure.
+ */
 static int
 mlx4_dev_start(struct rte_eth_dev *dev)
 {
@@ -2768,14 +3274,21 @@ mlx4_dev_start(struct rte_eth_dev *dev)
 				rxq_mac_addrs_del(rxq);
 			}
 		priv->started = 0;
-		return -1;
+		return -ret;
 	}
 	while ((--r) && ((rxq = (*priv->rxqs)[++i]), i));
 	priv_unlock(priv);
 	return 0;
 }
 
-/* Simulate device stop by detaching all configured flows. */
+/**
+ * DPDK callback to stop the device.
+ *
+ * Simulate device stop by detaching all configured flows.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ */
 static void
 mlx4_dev_stop(struct rte_eth_dev *dev)
 {
@@ -2812,6 +3325,22 @@ mlx4_dev_stop(struct rte_eth_dev *dev)
 	priv_unlock(priv);
 }
 
+/**
+ * Dummy DPDK callback for TX.
+ *
+ * This function is used to temporarily replace the real callback during
+ * unsafe control operations on the queue, or in case of error.
+ *
+ * @param dpdk_txq
+ *   Generic pointer to TX queue structure.
+ * @param[in] pkts
+ *   Packets to transmit.
+ * @param pkts_n
+ *   Number of packets in array.
+ *
+ * @return
+ *   Number of packets successfully transmitted (<= pkts_n).
+ */
 static uint16_t
 removed_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 {
@@ -2821,6 +3350,22 @@ removed_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	return 0;
 }
 
+/**
+ * Dummy DPDK callback for RX.
+ *
+ * This function is used to temporarily replace the real callback during
+ * unsafe control operations on the queue, or in case of error.
+ *
+ * @param dpdk_rxq
+ *   Generic pointer to RX queue structure.
+ * @param[out] pkts
+ *   Array to store received packets.
+ * @param pkts_n
+ *   Maximum number of packets in array.
+ *
+ * @return
+ *   Number of packets successfully received (<= pkts_n).
+ */
 static uint16_t
 removed_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 {
@@ -2830,6 +3375,14 @@ removed_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 	return 0;
 }
 
+/**
+ * DPDK callback to close the device.
+ *
+ * Destroy all queues and objects, free memory.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ */
 static void
 mlx4_dev_close(struct rte_eth_dev *dev)
 {
@@ -2887,6 +3440,14 @@ mlx4_dev_close(struct rte_eth_dev *dev)
 	memset(priv, 0, sizeof(*priv));
 }
 
+/**
+ * DPDK callback to get information about the device.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ * @param[out] info
+ *   Info structure output buffer.
+ */
 static void
 mlx4_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *info)
 {
@@ -2913,6 +3474,14 @@ mlx4_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *info)
 	priv_unlock(priv);
 }
 
+/**
+ * DPDK callback to get device statistics.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ * @param[out] stats
+ *   Stats structure output buffer.
+ */
 static void
 mlx4_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 {
@@ -2970,6 +3539,12 @@ mlx4_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 	priv_unlock(priv);
 }
 
+/**
+ * DPDK callback to clear device statistics.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ */
 static void
 mlx4_stats_reset(struct rte_eth_dev *dev)
 {
@@ -2998,6 +3573,14 @@ mlx4_stats_reset(struct rte_eth_dev *dev)
 	priv_unlock(priv);
 }
 
+/**
+ * DPDK callback to remove a MAC address.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ * @param index
+ *   MAC address index.
+ */
 static void
 mlx4_mac_addr_remove(struct rte_eth_dev *dev, uint32_t index)
 {
@@ -3017,6 +3600,18 @@ end:
 	priv_unlock(priv);
 }
 
+/**
+ * DPDK callback to add a MAC address.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ * @param mac_addr
+ *   MAC address to register.
+ * @param index
+ *   MAC address index.
+ * @param vmdq
+ *   VMDq pool index to associate address with (ignored).
+ */
 static void
 mlx4_mac_addr_add(struct rte_eth_dev *dev, struct ether_addr *mac_addr,
 		  uint32_t index, uint32_t vmdq)
@@ -3040,6 +3635,12 @@ end:
 	priv_unlock(priv);
 }
 
+/**
+ * DPDK callback to enable promiscuous mode.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ */
 static void
 mlx4_promiscuous_enable(struct rte_eth_dev *dev)
 {
@@ -3081,6 +3682,12 @@ end:
 	priv_unlock(priv);
 }
 
+/**
+ * DPDK callback to disable promiscuous mode.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ */
 static void
 mlx4_promiscuous_disable(struct rte_eth_dev *dev)
 {
@@ -3104,6 +3711,12 @@ end:
 	priv_unlock(priv);
 }
 
+/**
+ * DPDK callback to enable allmulti mode.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ */
 static void
 mlx4_allmulticast_enable(struct rte_eth_dev *dev)
 {
@@ -3145,6 +3758,12 @@ end:
 	priv_unlock(priv);
 }
 
+/**
+ * DPDK callback to disable allmulti mode.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ */
 static void
 mlx4_allmulticast_disable(struct rte_eth_dev *dev)
 {
@@ -3168,6 +3787,14 @@ end:
 	priv_unlock(priv);
 }
 
+/**
+ * DPDK callback to retrieve physical link information (unlocked version).
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ * @param wait_to_complete
+ *   Wait for request completion (ignored).
+ */
 static int
 mlx4_link_update_unlocked(struct rte_eth_dev *dev, int wait_to_complete)
 {
@@ -3200,6 +3827,14 @@ mlx4_link_update_unlocked(struct rte_eth_dev *dev, int wait_to_complete)
 	return -1;
 }
 
+/**
+ * DPDK callback to retrieve physical link information.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ * @param wait_to_complete
+ *   Wait for request completion (ignored).
+ */
 static int
 mlx4_link_update(struct rte_eth_dev *dev, int wait_to_complete)
 {
@@ -3214,6 +3849,17 @@ mlx4_link_update(struct rte_eth_dev *dev, int wait_to_complete)
 
 #ifdef HAVE_MTU_GET
 
+/**
+ * DPDK callback to retrieve the current MTU.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ * @param[out] mtu
+ *   MTU output buffer.
+ *
+ * @return
+ *   0 on success, negative errno value on failure.
+ */
 static int
 mlx4_dev_get_mtu(struct rte_eth_dev *dev, uint16_t *mtu)
 {
@@ -3222,6 +3868,7 @@ mlx4_dev_get_mtu(struct rte_eth_dev *dev, uint16_t *mtu)
 
 	priv_lock(priv);
 	if (priv_get_mtu(priv, mtu)) {
+		assert(errno);
 		ret = errno;
 		goto out;
 	}
@@ -3229,7 +3876,8 @@ mlx4_dev_get_mtu(struct rte_eth_dev *dev, uint16_t *mtu)
 	ret = 0;
 out:
 	priv_unlock(priv);
-	return ret;
+	assert(ret >= 0);
+	return -ret;
 }
 
 #endif /* HAVE_MTU_GET */
@@ -3245,11 +3893,23 @@ typedef uint16_t *mtu_t;
 
 #ifdef HAVE_MTU_SET
 
-/* Setting the MTU affects hardware MRU (packets larger than the MTU cannot be
+/**
+ * DPDK callback to change the MTU.
+ *
+ * Setting the MTU affects hardware MRU (packets larger than the MTU cannot be
  * received). Use this as a hint to enable/disable scattered packets support
  * and improve performance when not needed.
  * Since failure is not an option, reconfiguring queues on the fly is not
- * recommended. */
+ * recommended.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ * @param in_mtu
+ *   New MTU.
+ *
+ * @return
+ *   0 on success, negative errno value on failure.
+ */
 static int
 mlx4_dev_set_mtu(struct rte_eth_dev *dev, mtu_t in_mtu)
 {
@@ -3265,7 +3925,7 @@ mlx4_dev_set_mtu(struct rte_eth_dev *dev, mtu_t in_mtu)
 	if (priv_set_mtu(priv, mtu)) {
 		ret = errno;
 		WARN("cannot set port %u MTU to %u: %s", priv->port, mtu,
-		     strerror(errno));
+		     strerror(ret));
 		goto out;
 	}
 	else
@@ -3295,7 +3955,6 @@ mlx4_dev_set_mtu(struct rte_eth_dev *dev, mtu_t in_mtu)
 		dev->data->dev_conf.rxmode.jumbo_frame = sp;
 		dev->data->dev_conf.rxmode.max_rx_pkt_len = max_frame_len;
 		if ((ret = rxq_rehash(dev, rxq))) {
-			ret = -ret;
 			/* Force SP RX if that queue requires it and abort. */
 			if (rxq->sp)
 				rx_func = mlx4_rx_burst_sp;
@@ -3319,13 +3978,25 @@ mlx4_dev_set_mtu(struct rte_eth_dev *dev, mtu_t in_mtu)
 	dev->rx_pkt_burst = rx_func;
 out:
 	priv_unlock(priv);
-	return ret;
+	assert(ret >= 0);
+	return -ret;
 }
 
 #endif /* HAVE_MTU_SET */
 
 #ifdef HAVE_FLOW_CTRL_GET
 
+/**
+ * DPDK callback to get flow control status.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ * @param[out] fc_conf
+ *   Flow control output buffer.
+ *
+ * @return
+ *   0 on success, negative errno value on failure.
+ */
 static int
 mlx4_dev_get_flow_ctrl(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 {
@@ -3342,7 +4013,7 @@ mlx4_dev_get_flow_ctrl(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 		ret = errno;
 		WARN("ioctl(SIOCETHTOOL, ETHTOOL_GPAUSEPARAM)"
 		     " failed: %s",
-		     strerror(errno));
+		     strerror(ret));
 		goto out;
 	}
 
@@ -3361,11 +4032,23 @@ mlx4_dev_get_flow_ctrl(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 
 out:
 	priv_unlock(priv);
-	return ret;
+	assert(ret >= 0);
+	return -ret;
 }
 
 #endif /* HAVE_FLOW_CTRL_GET */
 
+/**
+ * DPDK callback to modify flow control parameters.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ * @param[in] fc_conf
+ *   Flow control parameters.
+ *
+ * @return
+ *   0 on success, negative errno value on failure.
+ */
 static int
 mlx4_dev_set_flow_ctrl(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 {
@@ -3395,16 +4078,30 @@ mlx4_dev_set_flow_ctrl(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 		ret = errno;
 		WARN("ioctl(SIOCETHTOOL, ETHTOOL_SPAUSEPARAM)"
 		     " failed: %s",
-		     strerror(errno));
+		     strerror(ret));
 		goto out;
 	}
 	ret = 0;
 
 out:
 	priv_unlock(priv);
-	return ret;
+	assert(ret >= 0);
+	return -ret;
 }
 
+/**
+ * Configure a VLAN filter.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ * @param vlan_id
+ *   VLAN ID to filter.
+ * @param on
+ *   Toggle filter.
+ *
+ * @return
+ *   0 on success, errno value on failure.
+ */
 static int
 vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 {
@@ -3428,7 +4125,7 @@ vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 	}
 	/* Check if there's room for another VLAN filter. */
 	if (j == (unsigned int)-1)
-		return -ENOMEM;
+		return ENOMEM;
 	/*
 	 * VLAN filters apply to all configured MAC addresses, flow
 	 * specifications must be reconfigured accordingly.
@@ -3483,6 +4180,19 @@ vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 	return 0;
 }
 
+/**
+ * DPDK callback to configure a VLAN filter.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ * @param vlan_id
+ *   VLAN ID to filter.
+ * @param on
+ *   Toggle filter.
+ *
+ * @return
+ *   0 on success, negative errno value on failure.
+ */
 static int
 mlx4_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 {
@@ -3492,7 +4202,8 @@ mlx4_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 	priv_lock(priv);
 	ret = vlan_filter_set(dev, vlan_id, on);
 	priv_unlock(priv);
-	return ret;
+	assert(ret >= 0);
+	return -ret;
 }
 
 static struct eth_dev_ops mlx4_dev_ops = {
@@ -3541,21 +4252,31 @@ static struct eth_dev_ops mlx4_dev_ops = {
 	.fdir_set_masks = NULL
 };
 
-/* Get PCI information from struct ibv_device, return nonzero on error. */
+/**
+ * Get PCI information from struct ibv_device.
+ *
+ * @param device
+ *   Pointer to Ethernet device structure.
+ * @param[out] pci_addr
+ *   PCI bus address output buffer.
+ *
+ * @return
+ *   0 on success, -1 on failure and errno is set.
+ */
 static int
 mlx4_ibv_device_to_pci_addr(const struct ibv_device *device,
 			    struct rte_pci_addr *pci_addr)
 {
 	FILE *file;
-	int ret = -1;
 	char line[32];
 	MKSTR(path, "%s/device/uevent", device->ibdev_path);
 
 	file = fopen(path, "rb");
 	if (file == NULL)
-		return ret;
+		return -1;
 	while (fgets(line, sizeof(line), file) == line) {
 		size_t len = strlen(line);
+		int ret;
 
 		/* Truncate long lines. */
 		if (len == (sizeof(line) - 1))
@@ -3578,10 +4299,19 @@ mlx4_ibv_device_to_pci_addr(const struct ibv_device *device,
 		}
 	}
 	fclose(file);
-	return ret;
+	return 0;
 }
 
-/* Derive MAC address from port GID. */
+/**
+ * Derive MAC address from port GID.
+ *
+ * @param[out] mac
+ *   MAC address output buffer.
+ * @param port
+ *   Physical port number.
+ * @param[in] gid
+ *   Port GID.
+ */
 static void
 mac_from_gid(uint8_t (*mac)[ETHER_ADDR_LEN], uint32_t port, uint8_t *gid)
 {
@@ -3597,7 +4327,15 @@ static struct {
 	uint32_t ports; /* physical ports bitfield. */
 } mlx4_dev[32];
 
-/* Return mlx4_dev[] index, or -1 on error. */
+/**
+ * Get device index in mlx4_dev[] from PCI bus address.
+ *
+ * @param[in] pci_addr
+ *   PCI bus address to look for.
+ *
+ * @return
+ *   mlx4_dev[] index on success, -1 on failure.
+ */
 static int
 mlx4_dev_idx(struct rte_pci_addr *pci_addr)
 {
@@ -3617,6 +4355,15 @@ mlx4_dev_idx(struct rte_pci_addr *pci_addr)
 	return ret;
 }
 
+/**
+ * Retrieve integer value from environment variable.
+ *
+ * @param[in] name
+ *   Environment variable name.
+ *
+ * @return
+ *   Integer value, 0 if the variable is not set.
+ */
 static int
 mlx4_getenv_int(const char *name)
 {
@@ -3629,12 +4376,26 @@ mlx4_getenv_int(const char *name)
 
 static struct eth_driver mlx4_driver;
 
+/**
+ * DPDK callback to register a PCI device.
+ *
+ * This function creates an Ethernet device for each port of a given
+ * PCI device.
+ *
+ * @param[in] pci_drv
+ *   PCI driver structure (mlx4_driver).
+ * @param[in] pci_dev
+ *   PCI device information.
+ *
+ * @return
+ *   0 on success, negative errno value on failure.
+ */
 static int
 mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 {
 	struct ibv_device **list;
 	struct ibv_device *ibv_dev;
-	int err = errno;
+	int err = 0;
 	struct ibv_context *attr_ctx = NULL;
 	struct ibv_device_attr device_attr;
 	unsigned int vf;
@@ -3684,10 +4445,10 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		break;
 	}
 	if (attr_ctx == NULL) {
-		ibv_free_device_list(list);
 		if (err == 0)
 			err = ENODEV;
-		errno = err;
+		ibv_free_device_list(list);
+		assert(err > 0);
 		return -err;
 	}
 	ibv_dev = list[i];
@@ -3721,8 +4482,8 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 			goto port_error;
 
 		/* Check port status. */
-		if ((errno = ibv_query_port(ctx, port, &port_attr))) {
-			ERROR("port query failed: %s", strerror(errno));
+		if ((err = ibv_query_port(ctx, port, &port_attr))) {
+			ERROR("port query failed: %s", strerror(err));
 			goto port_error;
 		}
 		if (port_attr.state != IBV_PORT_ACTIVE)
@@ -3734,7 +4495,7 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		pd = ibv_alloc_pd(ctx);
 		if (pd == NULL) {
 			ERROR("PD allocation failure");
-			errno = ENOMEM;
+			err = ENOMEM;
 			goto port_error;
 		}
 
@@ -3746,7 +4507,7 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		                   CACHE_LINE_SIZE);
 		if (priv == NULL) {
 			ERROR("priv allocation failure");
-			errno = ENOMEM;
+			err = ENOMEM;
 			goto port_error;
 		}
 
@@ -3837,7 +4598,7 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 #endif
 		if (eth_dev == NULL) {
 			ERROR("can not allocate rte ethdev");
-			errno = ENOMEM;
+			err = ENOMEM;
 			goto port_error;
 		}
 
@@ -3879,17 +4640,16 @@ port_error:
 
 	/* no port found, complain */
 	if (!mlx4_dev[idx].ports) {
-		errno = ENODEV;
+		err = ENODEV;
 		goto error;
 	}
 
 error:
-	err = errno;
 	if (attr_ctx)
 		claim_zero(ibv_close_device(attr_ctx));
 	if (list)
 		ibv_free_device_list(list);
-	errno = err;
+	assert(err >= 0);
 	return -err;
 }
 
