@@ -756,6 +756,7 @@ txq_alloc_elts(struct txq *txq, unsigned int elts_n)
 	if (mr_linear == NULL) {
 		ERROR("%p: unable to configure MR, ibv_reg_mr() failed",
 		      (void *)txq);
+		ret = EINVAL;
 		goto error;
 	}
 	for (i = 0; (i != elts_n); ++i) {
@@ -3012,7 +3013,7 @@ rxq_setup(struct rte_eth_dev *dev, struct rxq *rxq, uint16_t desc,
 			     (IBV_ACCESS_LOCAL_WRITE |
 			      IBV_ACCESS_REMOTE_WRITE));
 	if (tmpl.mr == NULL) {
-		ret = ENOMEM;
+		ret = EINVAL;
 		ERROR("%p: MR creation failure: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
