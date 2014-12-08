@@ -23,6 +23,16 @@ CFLAGS_SAVE := $(CFLAGS)
 LDFLAGS_SAVE := $(LDFLAGS)
 RTE_OUTPUT = $(O)
 
+ifndef RTE_SDK
+RTE_SDK = /usr/local/dpdk
+$(warning RTE_SDK is not set, assuming "$(RTE_SDK)".)
+endif
+
+ifndef RTE_TARGET
+RTE_TARGET = build
+$(warning RTE_TARGET is not set, assuming "$(RTE_TARGET)".)
+endif
+
 include $(RTE_SDK)/mk/rte.vars.mk
 
 CFLAGS += $(CFLAGS_SAVE)
@@ -50,7 +60,7 @@ LDFLAGS += $(LDFLAGS_SAVE)
 LDFLAGS += -shared
 LIBS += -libverbs
 
-all: warn $(OUT)
+all: $(OUT)
 
 install:
 	install -D -m 664 $(SOLIB) $(DESTDIR)$(libdir)/$(notdir $(SOLIB))
@@ -104,15 +114,4 @@ $(OUT): $(OBJ)
 clean:
 	$(RM) $(OUT) $(OBJ) config.h
 
-warn:
-ifeq ($(RTE_SDK),)
-	@echo warning: RTE_SDK is not set.
-endif
-ifeq ($(RTE_TARGET),)
-	@echo warning: RTE_TARGET is not set.
-endif
-
-# Default target if not set.
-RTE_TARGET = build
-
-.PHONY: warn all clean doc FORCE
+.PHONY: all clean doc FORCE
