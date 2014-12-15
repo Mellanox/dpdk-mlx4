@@ -141,6 +141,12 @@ static inline void wr_id_t_check(void)
 	(void)wr_id_t_check;
 }
 
+/* Transpose flags. Useful to convert IBV to DPDK flags. */
+#define TRANSPOSE(val, from, to) \
+	(((from) >= (to)) ? \
+	 (((val) & (from)) / ((from) / (to))) : \
+	 (((val) & (from)) * ((to) / (from))))
+
 /* If raw send operations are available, use them since they are faster. */
 #ifdef SEND_RAW_WR_SUPPORT
 typedef struct ibv_send_wr_raw mlx4_send_wr_t;
@@ -205,6 +211,7 @@ struct rxq {
 		struct rxq_elt (*no_sp)[]; /* RX elements. */
 	} elts;
 	unsigned int sp:1; /* Use scattered RX elements. */
+	unsigned int csum:1; /* Enable checksum offloading. */
 	uint32_t mb_len; /* Length of a mp-issued mbuf. */
 	struct mlx4_rxq_stats stats; /* RX queue counters. */
 	unsigned int socket; /* CPU socket ID for allocations. */
@@ -277,6 +284,7 @@ struct priv {
 	unsigned int hw_qpg:1; /* QP groups are supported. */
 	unsigned int hw_tss:1; /* TSS is supported. */
 	unsigned int hw_rss:1; /* RSS is supported. */
+	unsigned int hw_csum:1; /* Checksum offload is supported. */
 	unsigned int rss:1; /* RSS is enabled. */
 	unsigned int vf:1; /* This is a VF device. */
 #ifdef INLINE_RECV
@@ -887,7 +895,7 @@ txq_complete(struct txq *txq)
 	unsigned int elts_comp = txq->elts_comp;
 	unsigned int elts_tail;
 	const unsigned int elts_n = txq->elts_n;
-	struct ibv_wc wcs[elts_comp];
+	struct ibv_exp_wc wcs[elts_comp];
 	int wcs_n;
 
 	if (unlikely(elts_comp == 0))
@@ -896,11 +904,11 @@ txq_complete(struct txq *txq)
 	DEBUG("%p: processing %u work requests completions",
 	      (void *)txq, elts_comp);
 #endif
-	wcs_n = ibv_poll_cq(txq->cq, elts_comp, wcs);
+	wcs_n = ibv_exp_poll_cq(txq->cq, elts_comp, wcs, sizeof(wcs[0]));
 	if (unlikely(wcs_n == 0))
 		return 0;
 	if (unlikely(wcs_n < 0)) {
-		DEBUG("%p: ibv_poll_cq() failed (wcs_n=%d)",
+		DEBUG("%p: ibv_exp_poll_cq() failed (wcs_n=%d)",
 		      (void *)txq, wcs_n);
 		return -1;
 	}
@@ -1063,6 +1071,7 @@ mlx4_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 #endif
 		unsigned int j;
 		int linearize = 0;
+		uint64_t send_flags;
 
 		/* Clean up old buffer. */
 		if (likely(WR_ID(wr->wr_id).offset != 0)) {
@@ -1102,6 +1111,12 @@ mlx4_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			segs = (elemof(elt->sges) - 1);
 			linearize = 1;
 		}
+		/* Should we enable HW CKUM offload */
+		if (buf->ol_flags &
+		    (PKT_TX_IP_CKSUM | PKT_TX_TCP_CKSUM | PKT_TX_UDP_CKSUM))
+			send_flags = IBV_EXP_SEND_IP_CSUM;
+		else
+			send_flags = 0;
 		/* Set WR fields. */
 		assert(((uintptr_t)rte_pktmbuf_mtod(buf, char *) -
 			(uintptr_t)buf) <= 0xffff);
@@ -1212,10 +1227,10 @@ mlx4_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		wr_next = &wr->next;
 #if MLX4_PMD_MAX_INLINE > 0
 		if (sent_size <= txq->max_inline)
-			wr->send_flags = IBV_SEND_INLINE;
+			wr->send_flags |= (IBV_SEND_INLINE | send_flags);
 		else
 #endif
-			wr->send_flags = 0;
+			wr->send_flags = send_flags;
 		if (++elts_head >= elts_n)
 			elts_head = 0;
 #ifdef MLX4_PMD_SOFT_COUNTERS
@@ -2269,6 +2284,34 @@ rxq_cleanup(struct rxq *rxq)
 	memset(rxq, 0, sizeof(*rxq));
 }
 
+/**
+ * Translate RX work completion flags to offload flags.
+ *
+ * @param[in] rxq
+ *   Pointer to RX queue structure.
+ * @param exp_wc_flags
+ *   RX flags from struct ibv_exp_wc.
+ *
+ * @return
+ *   Offload flags (ol_flags) for struct rte_mbuf.
+ */
+static inline uint32_t
+rxq_wc_to_ol_flags(const struct rxq *rxq, uint64_t exp_wc_flags)
+{
+	uint32_t ol_flags;
+
+	ol_flags =
+		TRANSPOSE(exp_wc_flags, IBV_EXP_IPV4_PACKET, PKT_RX_IPV4_HDR) |
+		TRANSPOSE(exp_wc_flags, IBV_EXP_IPV6_PACKET, PKT_RX_IPV6_HDR);
+	if (rxq->csum)
+		ol_flags |=
+			TRANSPOSE(~exp_wc_flags,
+				  IBV_EXP_L3_RX_CSUM_OK, PKT_RX_IP_CKSUM_BAD) |
+			TRANSPOSE(~exp_wc_flags,
+				  IBV_EXP_L4_RX_CSUM_OK, PKT_RX_L4_CKSUM_BAD);
+	return ol_flags;
+}
+
 static uint16_t
 mlx4_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n);
 
@@ -2290,7 +2333,7 @@ mlx4_rx_burst_sp(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 {
 	struct rxq *rxq = (struct rxq *)dpdk_rxq;
 	struct rxq_elt_sp (*elts)[rxq->elts_n] = rxq->elts.sp;
-	struct ibv_wc wcs[pkts_n];
+	struct ibv_exp_wc wcs[pkts_n];
 	struct ibv_recv_wr head;
 	struct ibv_recv_wr **next = &head.next;
 	struct ibv_recv_wr *bad_wr;
@@ -2302,18 +2345,18 @@ mlx4_rx_burst_sp(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		return mlx4_rx_burst(dpdk_rxq, pkts, pkts_n);
 	if (unlikely(elts == NULL)) /* See RTE_DEV_CMD_SET_MTU. */
 		return 0;
-	wcs_n = ibv_poll_cq(rxq->cq, pkts_n, wcs);
+	wcs_n = ibv_exp_poll_cq(rxq->cq, pkts_n, wcs, sizeof(wcs[0]));
 	if (unlikely(wcs_n == 0))
 		return 0;
 	if (unlikely(wcs_n < 0)) {
-		DEBUG("rxq=%p, ibv_poll_cq() failed (wc_n=%d)",
+		DEBUG("rxq=%p, ibv_exp_poll_cq() failed (wc_n=%d)",
 		      (void *)rxq, wcs_n);
 		return 0;
 	}
 	assert(wcs_n <= (int)pkts_n);
 	/* For each work completion. */
 	for (i = 0; (i != wcs_n); ++i) {
-		struct ibv_wc *wc = &wcs[i];
+		struct ibv_exp_wc *wc = &wcs[i];
 		uint64_t wr_id = wc->wr_id;
 		uint32_t len = wc->byte_len;
 		struct rxq_elt_sp *elt = &(*elts)[wr_id];
@@ -2426,7 +2469,7 @@ mlx4_rx_burst_sp(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		NB_SEGS(pkt_buf) = j;
 		PORT(pkt_buf) = rxq->port_id;
 		PKT_LEN(pkt_buf) = wc->byte_len;
-		pkt_buf->ol_flags = 0;
+		pkt_buf->ol_flags = rxq_wc_to_ol_flags(rxq, wc->exp_wc_flags);
 
 		/* Return packet. */
 		*(pkts++) = pkt_buf;
@@ -2482,7 +2525,7 @@ mlx4_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 {
 	struct rxq *rxq = (struct rxq *)dpdk_rxq;
 	struct rxq_elt (*elts)[rxq->elts_n] = rxq->elts.no_sp;
-	struct ibv_wc wcs[pkts_n];
+	struct ibv_exp_wc wcs[pkts_n];
 	struct ibv_recv_wr head;
 	struct ibv_recv_wr **next = &head.next;
 	struct ibv_recv_wr *bad_wr;
@@ -2492,18 +2535,18 @@ mlx4_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 
 	if (unlikely(rxq->sp))
 		return mlx4_rx_burst_sp(dpdk_rxq, pkts, pkts_n);
-	wcs_n = ibv_poll_cq(rxq->cq, pkts_n, wcs);
+	wcs_n = ibv_exp_poll_cq(rxq->cq, pkts_n, wcs, sizeof(wcs[0]));
 	if (unlikely(wcs_n == 0))
 		return 0;
 	if (unlikely(wcs_n < 0)) {
-		DEBUG("rxq=%p, ibv_poll_cq() failed (wc_n=%d)",
+		DEBUG("rxq=%p, ibv_exp_poll_cq() failed (wc_n=%d)",
 		      (void *)rxq, wcs_n);
 		return 0;
 	}
 	assert(wcs_n <= (int)pkts_n);
 	/* For each work completion. */
 	for (i = 0; (i != wcs_n); ++i) {
-		struct ibv_wc *wc = &wcs[i];
+		struct ibv_exp_wc *wc = &wcs[i];
 		uint64_t wr_id = wc->wr_id;
 		uint32_t len = wc->byte_len;
 		struct rxq_elt *elt = &(*elts)[WR_ID(wr_id).id];
@@ -2567,7 +2610,7 @@ mlx4_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		NEXT(seg) = NULL;
 		PKT_LEN(seg) = len;
 		DATA_LEN(seg) = len;
-		seg->ol_flags = 0;
+		seg->ol_flags = rxq_wc_to_ol_flags(rxq, wc->exp_wc_flags);
 
 		/* Return packet. */
 		*(pkts++) = seg;
@@ -2791,6 +2834,11 @@ rxq_rehash(struct rte_eth_dev *dev, struct rxq *rxq)
 	/* Number of descriptors and mbufs currently allocated. */
 	desc_n = (tmpl.elts_n * (tmpl.sp ? MLX4_PMD_SGE_WR_N : 1));
 	mbuf_n = desc_n;
+	/* Toggle RX checksum offload if hardware supports it. */
+	if (priv->hw_csum) {
+		tmpl.csum = !!dev->data->dev_conf.rxmode.hw_ip_checksum;
+		rxq->csum = tmpl.csum;
+	}
 	/* Enable scattered packets support for this queue if necessary. */
 	if ((dev->data->dev_conf.rxmode.jumbo_frame) &&
 	    (dev->data->dev_conf.rxmode.max_rx_pkt_len >
@@ -3007,6 +3055,9 @@ rxq_setup(struct rte_eth_dev *dev, struct rxq *rxq, uint16_t desc,
 		rte_pktmbuf_tailroom(buf)) == tmpl.mb_len);
 	assert(rte_pktmbuf_headroom(buf) == RTE_PKTMBUF_HEADROOM);
 	rte_pktmbuf_free(buf);
+	/* Toggle RX checksum offload if hardware supports it. */
+	if (priv->hw_csum)
+		tmpl.csum = !!dev->data->dev_conf.rxmode.hw_ip_checksum;
 	/* Enable scattered packets support for this queue if necessary. */
 	if ((dev->data->dev_conf.rxmode.jumbo_frame) &&
 	    (dev->data->dev_conf.rxmode.max_rx_pkt_len >
@@ -3482,6 +3533,16 @@ mlx4_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *info)
 	info->max_rx_queues = max;
 	info->max_tx_queues = max;
 	info->max_mac_addrs = elemof(priv->mac);
+	info->rx_offload_capa =
+		(priv->hw_csum ?
+		 (DEV_RX_OFFLOAD_IPV4_CKSUM |
+		  DEV_RX_OFFLOAD_UDP_CKSUM |
+		  DEV_RX_OFFLOAD_TCP_CKSUM) :
+		 0);
+	info->tx_offload_capa =
+		(DEV_TX_OFFLOAD_IPV4_CKSUM |
+		 DEV_TX_OFFLOAD_UDP_CKSUM |
+		 DEV_TX_OFFLOAD_TCP_CKSUM);
 	priv_unlock(priv);
 }
 
@@ -4510,6 +4571,16 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 			DEBUG("maximum RSS indirection table size: %u",
 			      exp_device_attr.max_rss_tbl_sz);
 #endif /* RSS_SUPPORT */
+
+		/*
+		 * Checksum offloading is only reliable on ConnectX-3 Pro.
+		 * ConnectX-3 Pro VFs are reliable as well, but we cannot
+		 * deduce it from the PCI ID.
+		 */
+		priv->hw_csum = (pci_dev->id.device_id ==
+				 PCI_DEVICE_ID_MELLANOX_CONNECTX3PRO);
+		DEBUG("checksum offloading is %ssupported",
+		      (priv->hw_csum ? "" : "not "));
 
 #ifdef INLINE_RECV
 		priv->inl_recv_size = mlx4_getenv_int("MLX4_INLINE_RECV_SIZE");
