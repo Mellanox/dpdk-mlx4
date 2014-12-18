@@ -4068,12 +4068,14 @@ mlx4_dev_set_flow_ctrl(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 #ifdef HAVE_FC_CONF_AUTONEG
 	ethpause.autoneg = fc_conf->autoneg;
 #endif
-	if ((fc_conf->mode & RTE_FC_FULL) || (fc_conf->mode & RTE_FC_RX_PAUSE))
+	if (((fc_conf->mode & RTE_FC_FULL) == RTE_FC_FULL) ||
+	    (fc_conf->mode & RTE_FC_RX_PAUSE))
 		ethpause.rx_pause = 1;
 	else
 		ethpause.rx_pause = 0;
 
-	if ((fc_conf->mode & RTE_FC_FULL) || (fc_conf->mode & RTE_FC_TX_PAUSE))
+	if (((fc_conf->mode & RTE_FC_FULL) == RTE_FC_FULL) ||
+	    (fc_conf->mode & RTE_FC_TX_PAUSE))
 		ethpause.tx_pause = 1;
 	else
 		ethpause.tx_pause = 0;
