@@ -2241,6 +2241,8 @@ rxq_promiscuous_enable(struct rxq *rxq)
 		return EINVAL;
 	}
 #endif
+	if (rxq->priv->vf)
+		return 0;
 	DEBUG("%p: enabling promiscuous mode", (void *)rxq);
 	if (rxq->promisc_flow != NULL)
 		return EBUSY;
@@ -2275,6 +2277,8 @@ rxq_promiscuous_disable(struct rxq *rxq)
 		return;
 	}
 #endif
+	if (rxq->priv->vf)
+		return;
 	DEBUG("%p: disabling promiscuous mode", (void *)rxq);
 	if (rxq->promisc_flow == NULL)
 		return;
