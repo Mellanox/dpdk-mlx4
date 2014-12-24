@@ -79,6 +79,9 @@ config.h: comp_check.sh
 		$@ RSS_SUPPORT \
 		infiniband/verbs.h enum IBV_EXP_DEVICE_UD_RSS
 	$Q CC="$(CC)" CFLAGS="$(CFLAGS)" sh -- $< \
+		$@ INLINE_RECV \
+		infiniband/verbs.h enum IBV_EXP_DEVICE_ATTR_INLINE_RECV_SZ
+	$Q CC="$(CC)" CFLAGS="$(CFLAGS)" sh -- $< \
 		$@ SEND_RAW_WR_SUPPORT \
 		infiniband/verbs.h type 'struct ibv_send_wr_raw'
 	$Q CC="$(CC)" \
