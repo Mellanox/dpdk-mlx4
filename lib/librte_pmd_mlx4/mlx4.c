@@ -1940,7 +1940,7 @@ rxq_mac_addr_add(struct rxq *rxq, unsigned int mac_index)
 		},
 		.mask = {
 			.dst_mac = "\xff\xff\xff\xff\xff\xff",
-			.vlan_tag = (vlans ? 0xfff : 0)
+			.vlan_tag = (vlans ? htons(0xfff) : 0)
 		}
 	};
 	/* Fill VLAN specifications. */
@@ -1950,7 +1950,7 @@ rxq_mac_addr_add(struct rxq *rxq, unsigned int mac_index)
 		assert(j != vlans);
 		if (j)
 			spec[j] = spec[0];
-		spec[j].val.vlan_tag = priv->vlan_filter[i].id;
+		spec[j].val.vlan_tag = htons(priv->vlan_filter[i].id);
 		++j;
 	}
 	DEBUG("%p: adding MAC address %02x:%02x:%02x:%02x:%02x:%02x index %u"
