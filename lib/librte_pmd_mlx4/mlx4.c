@@ -2686,7 +2686,7 @@ rxq_setup_qp(struct priv *priv, struct ibv_cq *cq, uint16_t desc)
 	return ibv_create_qp(priv->pd, &attr);
 }
 
-#if RSS_SUPPORT
+#ifdef RSS_SUPPORT
 
 /**
  * Allocate a RSS Queue Pair.
@@ -2835,7 +2835,7 @@ rxq_rehash(struct rte_eth_dev *dev, struct rxq *rxq)
 	};
 	if ((err = ibv_exp_modify_qp(tmpl.qp, &mod,
 				 (IBV_EXP_QP_STATE |
-#if RSS_SUPPORT
+#ifdef RSS_SUPPORT
 				  (parent ? IBV_EXP_QP_GROUP_RSS : 0) |
 #endif /* RSS_SUPPORT */
 				  IBV_EXP_QP_PORT)))) {
@@ -3034,7 +3034,7 @@ skip_mr:
 	      priv->device_attr.max_qp_wr);
 	DEBUG("priv->device_attr.max_sge is %d",
 	      priv->device_attr.max_sge);
-#if RSS_SUPPORT
+#ifdef RSS_SUPPORT
 	if (priv->rss)
 		tmpl.qp = rxq_setup_qp_rss(priv, tmpl.cq, desc, parent);
 	else
@@ -3054,7 +3054,7 @@ skip_mr:
 	};
 	if ((ret = ibv_exp_modify_qp(tmpl.qp, &mod,
 				     (IBV_EXP_QP_STATE |
-#if RSS_SUPPORT
+#ifdef RSS_SUPPORT
 				      (parent ? IBV_EXP_QP_GROUP_RSS : 0) |
 #endif /* RSS_SUPPORT */
 				      IBV_EXP_QP_PORT)))) {
@@ -4473,7 +4473,7 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		struct ibv_pd *pd = NULL;
 		struct priv *priv = NULL;
 		struct rte_eth_dev *eth_dev;
-#if RSS_SUPPORT
+#ifdef RSS_SUPPORT
 		struct ibv_exp_device_attr exp_device_attr = {
 			.comp_mask = (IBV_EXP_DEVICE_ATTR_EXP_CAP_FLAGS |
 				      IBV_EXP_DEVICE_ATTR_RSS_TBL_SZ)
@@ -4524,7 +4524,7 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		priv->port = port;
 		priv->pd = pd;
 		priv->mtu = ETHER_MTU;
-#if RSS_SUPPORT
+#ifdef RSS_SUPPORT
 		if (ibv_exp_query_device(ctx, &exp_device_attr)) {
 			INFO("experimental ibv_exp_query_device");
 			goto port_error;
