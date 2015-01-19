@@ -64,6 +64,10 @@
 #pragma GCC diagnostic error "-pedantic"
 #endif
 
+#ifndef RTE_CACHE_LINE_SIZE
+#define RTE_CACHE_LINE_SIZE CACHE_LINE_SIZE
+#endif
+
 /* System configuration header. */
 #include "config.h"
 
@@ -4572,7 +4576,7 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		/* from rte_ethdev.c */
 		priv = rte_zmalloc("ethdev private structure",
 		                   sizeof(*priv),
-		                   CACHE_LINE_SIZE);
+		                   RTE_CACHE_LINE_SIZE);
 		if (priv == NULL) {
 			ERROR("priv allocation failure");
 			err = ENOMEM;
