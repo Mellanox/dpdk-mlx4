@@ -33,6 +33,9 @@ RTE_TARGET = build
 $(warning RTE_TARGET is not set, assuming "$(RTE_TARGET)".)
 endif
 
+# Workaround for --no-as-needed linker directive in DPDK 1.8.
+override EXECENV_LDFLAGS =
+
 include $(RTE_SDK)/mk/rte.vars.mk
 
 CFLAGS += $(CFLAGS_SAVE)
