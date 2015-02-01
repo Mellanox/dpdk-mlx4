@@ -221,8 +221,13 @@ struct rxq {
 
 /* TX element. */
 struct txq_elt {
+#if MLX4_PMD_SGE_WR_N == 1
+	uint64_t wr_id;
+	uint64_t addr;
+#else
 	mlx4_send_wr_t wr; /* Work Request. */
 	struct ibv_sge sges[MLX4_PMD_SGE_WR_N]; /* Scatter/Gather Elements. */
+#endif /* MLX4_PMD_SGE_WR_N == 1 */
 	/* mbuf pointer is derived from WR_ID(wr.wr_id).offset. */
 };
 
@@ -244,6 +249,16 @@ struct txq {
 	} mp2mr[MLX4_PMD_TX_MP_CACHE]; /* MP to MR translation table. */
 	struct ibv_cq *cq; /* Completion Queue. */
 	struct ibv_qp *qp; /* Queue Pair. */
+#if MLX4_PMD_SGE_WR_N == 1
+	drv_exp_post_send_raw_sgl_func ibv_exp_post_send_raw_sgl;
+	drv_exp_post_send_raw_one_func ibv_exp_post_send_raw_one;
+	drv_exp_flush_send_func ibv_exp_flush_send;
+	drv_exp_drain_cq_func ibv_exp_drain_cq;
+	uint32_t mlx4_send_with_none;
+	uint32_t mlx4_send_with_comp_req;
+	uint32_t mlx4_send_with_csum;
+	uint32_t mlx4_send_with_csum_tunnel;
+#endif
 #if MLX4_PMD_MAX_INLINE > 0
 	uint32_t max_inline; /* Max inline send size <= MLX4_PMD_MAX_INLINE. */
 #endif
@@ -252,6 +267,12 @@ struct txq {
 	unsigned int elts_head; /* Current index in (*elts)[]. */
 	unsigned int elts_tail; /* First element awaiting completion. */
 	unsigned int elts_comp; /* Number of completion requests. */
+#if MLX4_PMD_SGE_WR_N == 1
+	/* Count down fixed number of sends for each completion request. */
+	unsigned int elts_comp_req_countdown;
+	/* Request sends completion event every X packets. */
+	unsigned int elts_comp_req_countdown_init;
+#endif
 	struct mlx4_txq_stats stats; /* TX queue counters. */
 	linear_t (*elts_linear)[]; /* Linearized buffers. */
 	struct ibv_mr *mr_linear; /* Memory Region for linearized buffers. */
@@ -781,6 +802,11 @@ txq_alloc_elts(struct txq *txq, unsigned int elts_n)
 	}
 	for (i = 0; (i != elts_n); ++i) {
 		struct txq_elt *elt = &(*elts)[i];
+#if MLX4_PMD_SGE_WR_N == 1
+
+		WR_ID(elt->wr_id).id = i;
+		WR_ID(elt->wr_id).offset = 0;
+#else /* MLX4_PMD_SGE_WR_N == 1 */
 		mlx4_send_wr_t *wr = &elt->wr;
 
 		/* Configure WR. */
@@ -789,6 +815,7 @@ txq_alloc_elts(struct txq *txq, unsigned int elts_n)
 		wr->sg_list = &elt->sges[0];
 		wr->opcode = IBV_WR_SEND;
 		/* Other fields are updated during TX. */
+#endif /* MLX4_PMD_SGE_WR_N == 1 */
 	}
 	DEBUG("%p: allocated and configured %u WRs", (void *)txq, elts_n);
 	txq->elts_n = elts_n;
@@ -796,6 +823,14 @@ txq_alloc_elts(struct txq *txq, unsigned int elts_n)
 	txq->elts_head = 0;
 	txq->elts_tail = 0;
 	txq->elts_comp = 0;
+#if MLX4_PMD_SGE_WR_N == 1
+	/* Request send completion every 64 packets or at least 4 times
+	 * per ring size if less then 64. */
+	txq->elts_comp_req_countdown_init =
+		((MLX4_PMD_TX_PER_COMP_REQ < (elts_n / 4)) ?
+		 MLX4_PMD_TX_PER_COMP_REQ : (elts_n / 4));
+	txq->elts_comp_req_countdown = txq->elts_comp_req_countdown_init;
+#endif /* MLX4_PMD_SGE_WR_N == 1 */
 	txq->elts_linear = elts_linear;
 	txq->mr_linear = mr_linear;
 	assert(ret == 0);
@@ -841,10 +876,17 @@ txq_free_elts(struct txq *txq)
 	for (i = 0; (i != elemof(*elts)); ++i) {
 		struct txq_elt *elt = &(*elts)[i];
 
+#if MLX4_PMD_SGE_WR_N == 1
+		if (WR_ID(elt->wr_id).offset == 0)
+			continue;
+		rte_pktmbuf_free((void *)(elt->addr -
+					  WR_ID(elt->wr_id).offset));
+#else /* MLX4_PMD_SGE_WR_N == 1 */
 		if (WR_ID(elt->wr.wr_id).offset == 0)
 			continue;
 		rte_pktmbuf_free((void *)(elt->sges[0].addr -
 					  WR_ID(elt->wr.wr_id).offset));
+#endif /* MLX4_PMD_SGE_WR_N == 1 */
 	}
 	rte_free(elts);
 }
@@ -895,10 +937,15 @@ txq_cleanup(struct txq *txq)
 static int
 txq_complete(struct txq *txq)
 {
-	unsigned int elts_comp = txq->elts_comp;
-	unsigned int elts_tail;
 	const unsigned int elts_n = txq->elts_n;
+	unsigned int elts_comp = txq->elts_comp;
+#if MLX4_PMD_SGE_WR_N == 1
+	unsigned int elts_tail = txq->elts_tail;
+	/* NO wc[] to read, just move elts_tail... */
+#else
+	unsigned int elts_tail;
 	struct ibv_exp_wc wcs[elts_comp];
+#endif /* MLX4_PMD_SGE_WR_N == 1 */
 	int wcs_n;
 
 	if (unlikely(elts_comp == 0))
@@ -907,7 +954,11 @@ txq_complete(struct txq *txq)
 	DEBUG("%p: processing %u work requests completions",
 	      (void *)txq, elts_comp);
 #endif
+#if MLX4_PMD_SGE_WR_N == 1
+	wcs_n = txq->ibv_exp_drain_cq(txq->cq, elts_comp);
+#else /* MLX4_PMD_SGE_WR_N == 1 */
 	wcs_n = ibv_exp_poll_cq(txq->cq, elts_comp, wcs, sizeof(wcs[0]));
+#endif /* MLX4_PMD_SGE_WR_N == 1 */
 	if (unlikely(wcs_n == 0))
 		return 0;
 	if (unlikely(wcs_n < 0)) {
@@ -925,10 +976,16 @@ txq_complete(struct txq *txq)
 	 * Assume WC status is successful as nothing can be done about it
 	 * anyway.
 	 */
+#if MLX4_PMD_SGE_WR_N == 1
+	elts_tail += wcs_n * txq->elts_comp_req_countdown_init;
+	if (elts_tail >= elts_n)
+		elts_tail -= elts_n;
+#else /* MLX4_PMD_SGE_WR_N == 1 */
 	elts_tail = WR_ID(wcs[wcs_n - 1].wr_id).id;
 	/* Consume the last WC. */
 	if (++elts_tail >= elts_n)
 		elts_tail = 0;
+#endif /* MLX4_PMD_SGE_WR_N == 1 */
 	txq->elts_tail = elts_tail;
 	txq->elts_comp = elts_comp;
 	return 0;
@@ -992,6 +1049,149 @@ txq_mp2mr(struct txq *txq, struct rte_mempool *mp)
 	      (void *)txq, (void *)mp, txq->mp2mr[i].lkey);
 	return txq->mp2mr[i].lkey;
 }
+
+#if MLX4_PMD_SGE_WR_N == 1
+
+/**
+ * DPDK callback for TX.
+ *
+ * @param dpdk_txq
+ *   Generic pointer to TX queue structure.
+ * @param[in] pkts
+ *   Packets to transmit.
+ * @param pkts_n
+ *   Number of packets in array.
+ *
+ * @return
+ *   Number of packets successfully transmitted (<= pkts_n).
+ */
+static uint16_t
+mlx4_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
+{
+	struct txq *txq = (struct txq *)dpdk_txq;
+	const unsigned int elts_n = txq->elts_n;
+	unsigned int elts_head = txq->elts_head;
+	const unsigned int elts_tail = txq->elts_tail;
+	unsigned int elts_comp_req_countdown = txq->elts_comp_req_countdown;
+	unsigned int elts_comp = 0;
+	unsigned int i;
+	unsigned int max;
+
+	txq_complete(txq);
+	max = (elts_n - (elts_head - elts_tail));
+	if (max > elts_n)
+		max -= elts_n;
+	assert(max >= 1);
+	assert(max <= elts_n);
+	/* Always leave one free entry in the ring. */
+	--max;
+	if (max == 0)
+		return 0;
+	if (max > pkts_n)
+		max = pkts_n;
+	for (i = 0; (i != max); ++i) {
+		struct rte_mbuf *buf = pkts[i];
+		struct txq_elt *elt = &(*txq->elts)[elts_head];
+
+		/* Clean up old buffer. */
+		if (likely(WR_ID(elt->wr_id).offset != 0)) {
+			struct rte_mbuf *tmp = (void *)
+				(elt->addr - WR_ID(elt->wr_id).offset);
+
+			/* Faster than rte_pktmbuf_free(). */
+			do {
+				struct rte_mbuf *next = NEXT(tmp);
+
+				rte_pktmbuf_free_seg(tmp);
+				tmp = next;
+			}
+			while (tmp != NULL);
+		}
+
+		/* Set send addr */
+		uint64_t addr = (uintptr_t)rte_pktmbuf_mtod(buf, char *);
+
+		elt->addr = addr;
+
+		/* Save offset to retrieve mbuf after completion */
+		assert(((uintptr_t)elt->addr - (uintptr_t)buf) <= 0xffff);
+		WR_ID(elt->wr_id).offset =
+			((uintptr_t)elt->addr - (uintptr_t)buf);
+
+		/* Set send length */
+		uint32_t length = DATA_LEN(buf);
+
+		/* Retrieve Memory Region key for this memory pool. */
+		uint32_t lkey = txq_mp2mr(txq, buf->pool);
+
+		if (unlikely(lkey == (uint32_t)-1)) {
+			/* MR does not exist. */
+			DEBUG("%p: unable to get MP <-> MR"
+			      " association", (void *)txq);
+			/* Clean up TX element. */
+			WR_ID(elt->wr_id).offset = 0;
+			goto stop;
+		}
+
+		if (++elts_head >= elts_n)
+			elts_head = 0;
+#ifdef MLX4_PMD_SOFT_COUNTERS
+		/* Increment sent bytes counter. */
+		txq->stats.obytes += length;
+#endif
+
+		/* Prepare for MAC copy */
+		if (txq->priv->vf)
+			rte_prefetch0((volatile void *)elt->addr);
+
+		uint32_t vendor_send_flags = txq->mlx4_send_with_none;
+
+		/* Should we enable HW CKUM offload */
+		if (buf->ol_flags &
+		    (PKT_TX_IP_CKSUM |
+		     PKT_TX_TCP_CKSUM |
+		     PKT_TX_UDP_CKSUM |
+#ifdef PKT_TX_OUTER_IP_CKSUM
+		     PKT_TX_OUTER_IP_CKSUM |
+#endif
+		     0))
+			vendor_send_flags |= txq->mlx4_send_with_csum;
+#ifdef PKT_TX_UDP_TUNNEL_PKT
+		if (buf->ol_flags & PKT_TX_UDP_TUNNEL_PKT) {
+			vendor_send_flags &= ~txq->mlx4_send_with_csum;
+			vendor_send_flags |= txq->mlx4_send_with_csum_tunnel;
+		}
+#endif
+
+		/* Should we signal for a Tx completion request */
+		if (unlikely(--elts_comp_req_countdown == 0)) {
+			elts_comp_req_countdown =
+				txq->elts_comp_req_countdown_init;
+			++elts_comp;
+			vendor_send_flags |= txq->mlx4_send_with_comp_req;
+		}
+
+		/* Post packet to HW send queues */
+		txq->ibv_exp_post_send_raw_one(txq->qp, addr, length, lkey,
+					       vendor_send_flags);
+	}
+
+	/* Make sure HW starts working on the queued requests */
+	txq->ibv_exp_flush_send(txq->qp);
+
+stop:
+#ifdef MLX4_PMD_SOFT_COUNTERS
+	/* Increment sent packets counter. */
+	txq->stats.opackets += i;
+#endif
+	txq->elts_head = elts_head;
+	txq->elts_comp += elts_comp;
+	txq->elts_comp_req_countdown = elts_comp_req_countdown;
+
+	return i;
+}
+
+#else /* MLX4_PMD_SGE_WR_N == 1 */
 
 /**
  * Copy scattered mbuf contents to a single linear buffer.
@@ -1316,6 +1516,8 @@ stop:
 	return i;
 }
 
+#endif /* MLX4_PMD_SGE_WR_N == 1 */
+
 /**
  * Configure a TX queue.
  *
@@ -1437,6 +1639,46 @@ txq_setup(struct rte_eth_dev *dev, struct txq *txq, uint16_t desc,
 		      (void *)dev, strerror(ret));
 		goto error;
 	}
+#if MLX4_PMD_SGE_WR_N == 1
+	tmpl.ibv_exp_post_send_raw_one =
+		(drv_exp_post_send_raw_one_func)(uintptr_t)
+		ibv_exp_get_provider_func(tmpl.cq->context,
+					  IBV_EXP_POST_SEND_RAW_ONE_FUNC);
+	tmpl.ibv_exp_post_send_raw_sgl =
+		(drv_exp_post_send_raw_sgl_func)(uintptr_t)
+		ibv_exp_get_provider_func(tmpl.cq->context,
+					  IBV_EXP_POST_SEND_RAW_SGL_FUNC);
+	tmpl.ibv_exp_flush_send =
+		(drv_exp_flush_send_func)(uintptr_t)
+		ibv_exp_get_provider_func(tmpl.cq->context,
+					  IBV_EXP_FLUSH_SEND_FUNC);
+	tmpl.ibv_exp_drain_cq =
+		(drv_exp_drain_cq_func)(uintptr_t)
+		ibv_exp_get_provider_func(tmpl.cq->context,
+					  IBV_EXP_DRAIN_CQ_FUNC);
+	if (!tmpl.ibv_exp_post_send_raw_one ||
+	    !tmpl.ibv_exp_post_send_raw_sgl ||
+	    !tmpl.ibv_exp_flush_send ||
+	    !tmpl.ibv_exp_drain_cq) {
+		ERROR("Cant find QP fast send APIs"
+		      " (raw_one=%p, raw_sle=%p, flsuh_send=%p, drain_cq=%p)",
+		      (void *)(uintptr_t)tmpl.ibv_exp_post_send_raw_one,
+		      (void *)(uintptr_t)tmpl.ibv_exp_post_send_raw_sgl,
+		      (void *)(uintptr_t)tmpl.ibv_exp_flush_send,
+		      (void *)(uintptr_t)tmpl.ibv_exp_drain_cq);
+		goto error;
+	}
+	tmpl.mlx4_send_with_none =
+		ibv_exp_query_post_send_flag(tmpl.qp, 0);
+	tmpl.mlx4_send_with_comp_req =
+		ibv_exp_query_post_send_flag(tmpl.qp, IBV_SEND_SIGNALED);
+	tmpl.mlx4_send_with_csum =
+		ibv_exp_query_post_send_flag(tmpl.qp, IBV_EXP_SEND_IP_CSUM);
+	tmpl.mlx4_send_with_csum_tunnel =
+		ibv_exp_query_post_send_flag(tmpl.qp,
+					     (IBV_EXP_SEND_IP_CSUM |
+					      IBV_EXP_SEND_L2_TUNNEL));
+#endif /* MLX4_PMD_SGE_WR_N == 1 */
 	/* Clean up txq in case we're reinitializing it. */
 	DEBUG("%p: cleaning-up old txq just in case", (void *)txq);
 	txq_cleanup(txq);
