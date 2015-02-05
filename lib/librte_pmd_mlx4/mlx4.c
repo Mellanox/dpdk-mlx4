@@ -196,6 +196,7 @@ struct rxq {
 	struct ibv_mr *mr; /* Memory Region (for mp). */
 	struct ibv_cq *cq; /* Completion Queue. */
 	struct ibv_qp *qp; /* Queue Pair. */
+	drv_exp_poll_cq_func ibv_exp_poll_cq;
 	/*
 	 * There is exactly one flow configured per MAC address. Each flow
 	 * may contain several specifications, one per configured VLAN ID.
@@ -2377,7 +2378,7 @@ mlx4_rx_burst_sp(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		return mlx4_rx_burst(dpdk_rxq, pkts, pkts_n);
 	if (unlikely(elts == NULL)) /* See RTE_DEV_CMD_SET_MTU. */
 		return 0;
-	wcs_n = ibv_exp_poll_cq(rxq->cq, pkts_n, wcs, sizeof(wcs[0]));
+	wcs_n = rxq->ibv_exp_poll_cq(rxq->cq, pkts_n, wcs, sizeof(wcs[0]));
 	if (unlikely(wcs_n == 0))
 		return 0;
 	if (unlikely(wcs_n < 0)) {
@@ -2567,7 +2568,7 @@ mlx4_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 
 	if (unlikely(rxq->sp))
 		return mlx4_rx_burst_sp(dpdk_rxq, pkts, pkts_n);
-	wcs_n = ibv_exp_poll_cq(rxq->cq, pkts_n, wcs, sizeof(wcs[0]));
+	wcs_n = rxq->ibv_exp_poll_cq(rxq->cq, pkts_n, wcs, sizeof(wcs[0]));
 	if (unlikely(wcs_n == 0))
 		return 0;
 	if (unlikely(wcs_n < 0)) {
@@ -3204,6 +3205,9 @@ skip_alloc:
 	/* Save port ID. */
 	tmpl.port_id = dev->data->port_id;
 	DEBUG("%p: RTE port ID: %u", (void *)rxq, tmpl.port_id);
+	tmpl.ibv_exp_poll_cq = (drv_exp_poll_cq_func)(uintptr_t)
+		ibv_exp_get_provider_func(tmpl.cq->context,
+					  IBV_EXP_POLL_CQ_FUNC);
 	/* Clean up rxq in case we're reinitializing it. */
 	DEBUG("%p: cleaning-up old rxq just in case", (void *)rxq);
 	rxq_cleanup(rxq);
