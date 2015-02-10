@@ -221,9 +221,7 @@ struct rxq {
 
 /* TX element. */
 struct txq_elt {
-	uint64_t wr_id;
-	uint64_t addr;
-	/* mbuf pointer is derived from WR_ID(wr_id).offset. */
+	struct rte_mbuf *mbuf;
 };
 
 /* Linear buffer type. It is used when transmitting buffers with too many
@@ -794,8 +792,7 @@ txq_alloc_elts(struct txq *txq, unsigned int elts_n)
 	for (i = 0; (i != elts_n); ++i) {
 		struct txq_elt *elt = &(*elts)[i];
 
-		WR_ID(elt->wr_id).id = i;
-		WR_ID(elt->wr_id).offset = 0;
+		elt->mbuf = NULL;
 	}
 	DEBUG("%p: allocated and configured %u WRs", (void *)txq, elts_n);
 	txq->elts_n = elts_n;
@@ -854,10 +851,9 @@ txq_free_elts(struct txq *txq)
 	for (i = 0; (i != elemof(*elts)); ++i) {
 		struct txq_elt *elt = &(*elts)[i];
 
-		if (WR_ID(elt->wr_id).offset == 0)
+		if (elt->mbuf == NULL)
 			continue;
-		rte_pktmbuf_free((void *)(elt->addr -
-					  WR_ID(elt->wr_id).offset));
+		rte_pktmbuf_free(elt->mbuf);
 	}
 	rte_free(elts);
 }
@@ -1052,11 +1048,6 @@ mlx4_tx_burst_sg_helper(struct txq *txq, struct rte_mbuf *buf,
 #endif
 	struct ibv_sge sges[MLX4_PMD_SGE_WR_N]; /* Scatter/Gather Elements. */
 
-	/* Save offset to retrieve mbuf after completion */
-	elt->addr = (uintptr_t)rte_pktmbuf_mtod(buf, char *);
-	assert(((uintptr_t)elt->addr - (uintptr_t)buf) <= 0xffff);
-	WR_ID(elt->wr_id).offset = ((uintptr_t)elt->addr - (uintptr_t)buf);
-
 	/* When there are too many segments, extra segments are
 	 * linearized in the last SGE. */
 	if (unlikely(segs > elemof(sges))) {
@@ -1076,7 +1067,7 @@ mlx4_tx_burst_sg_helper(struct txq *txq, struct rte_mbuf *buf,
 			DEBUG("%p: unable to get MP <-> MR"
 			      " association", (void *)txq);
 			/* Clean up TX element. */
-			WR_ID(elt->wr_id).offset = 0;
+			elt->mbuf = NULL;
 			goto stop;
 		}
 
@@ -1109,7 +1100,7 @@ mlx4_tx_burst_sg_helper(struct txq *txq, struct rte_mbuf *buf,
 			DEBUG("%p: packet too large to be linearized.",
 			      (void *)txq);
 			/* Clean up TX element. */
-			WR_ID(elt->wr_id).offset = 0;
+			elt->mbuf = NULL;
 			goto stop;
 		}
 		/* If MLX4_PMD_SGE_WR_N is 1, free mbuf immediately
@@ -1121,7 +1112,7 @@ mlx4_tx_burst_sg_helper(struct txq *txq, struct rte_mbuf *buf,
 				rte_pktmbuf_free_seg(buf);
 				buf = next;
 			} while (buf != NULL);
-			WR_ID(elt->wr_id).offset = 0;
+			elt->mbuf = NULL;
 		}
 
 		/* Update SGE. */
@@ -1140,7 +1131,7 @@ mlx4_tx_burst_sg_helper(struct txq *txq, struct rte_mbuf *buf,
 
 	/* Prepare for MAC copy */
 	if (txq->priv->vf)
-		rte_prefetch0((volatile void *)elt->addr);
+		rte_prefetch0((volatile void *)sges[0].addr);
 
 	/* Should we enable HW CKUM offload */
 	if (buf_orig->ol_flags &
@@ -1214,9 +1205,8 @@ mlx4_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		struct txq_elt *elt = &(*txq->elts)[elts_head];
 
 		/* Clean up old buffer. */
-		if (likely(WR_ID(elt->wr_id).offset != 0)) {
-			struct rte_mbuf *tmp = (void *)
-				(elt->addr - WR_ID(elt->wr_id).offset);
+		if (likely(elt->mbuf != 0)) {
+			struct rte_mbuf *tmp = elt->mbuf;
 
 			/* Faster than rte_pktmbuf_free(). */
 			do {
@@ -1226,6 +1216,9 @@ mlx4_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 				tmp = next;
 			} while (tmp != NULL);
 		}
+
+		/* Save new mbuf so we can retrieve later (after completion) */
+		elt->mbuf = buf;
 
 #if MLX4_PMD_SGE_WR_N > 1
 		/* SG list send handling */
@@ -1255,13 +1248,6 @@ mlx4_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		/* Set send addr */
 		uint64_t addr = (uintptr_t)rte_pktmbuf_mtod(buf, char *);
 
-		elt->addr = addr;
-
-		/* Save offset to retrieve mbuf after completion */
-		assert(((uintptr_t)elt->addr - (uintptr_t)buf) <= 0xffff);
-		WR_ID(elt->wr_id).offset =
-			((uintptr_t)elt->addr - (uintptr_t)buf);
-
 		/* Set send length */
 		uint32_t length = DATA_LEN(buf);
 
@@ -1273,7 +1259,7 @@ mlx4_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			DEBUG("%p: unable to get MP <-> MR"
 			      " association", (void *)txq);
 			/* Clean up TX element. */
-			WR_ID(elt->wr_id).offset = 0;
+			elt->mbuf = NULL;
 			goto stop;
 		}
 
@@ -1287,7 +1273,7 @@ mlx4_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 
 		/* Prepare for MAC copy */
 		if (txq->priv->vf)
-			rte_prefetch0((volatile void *)elt->addr);
+			rte_prefetch0((volatile void *)addr);
 
 		uint32_t vendor_send_flags = txq->mlx4_send_with_none;
 
