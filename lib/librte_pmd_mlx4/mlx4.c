@@ -2737,9 +2737,16 @@ repost:
 }
 
 #ifdef INLINE_RECV
+typedef struct ibv_exp_qp_init_attr mlx4_qp_init_attr_t;
+#define mlx4_create_qp ibv_exp_create_qp
+#else /* INLINE_RECV */
+typedef struct ibv_qp_init_attr mlx4_qp_init_attr_t;
+#define mlx4_create_qp ibv_create_qp
+#endif
 
 /**
- * Allocate a Queue Pair in case inline receive is supported.
+ * Allocate a Queue Pair
+ * Optionally setup inline receive if supported.
  *
  * @param priv
  *   Pointer to private structure.
@@ -2754,12 +2761,11 @@ repost:
 static struct ibv_qp *
 rxq_setup_qp(struct priv *priv, struct ibv_cq *cq, uint16_t desc)
 {
-	struct ibv_exp_qp_init_attr attr = {
+	mlx4_qp_init_attr_t attr = {
 		/* CQ to be associated with the send queue. */
 		.send_cq = cq,
 		/* CQ to be associated with the receive queue. */
 		.recv_cq = cq,
-		.max_inl_recv = priv->inl_recv_size,
 		.cap = {
 			/* Max number of outstanding WRs. */
 			.max_recv_wr = ((priv->device_attr.max_qp_wr < desc) ?
@@ -2772,61 +2778,23 @@ rxq_setup_qp(struct priv *priv, struct ibv_cq *cq, uint16_t desc)
 					 MLX4_PMD_SGE_WR_N),
 		},
 		.qp_type = IBV_QPT_RAW_PACKET,
-		.pd = priv->pd
-	};
+		};
 
+#ifdef INLINE_RECV
+	attr.pd = priv->pd;
+	attr.max_inl_recv = priv->inl_recv_size;
 	attr.comp_mask = IBV_EXP_QP_INIT_ATTR_PD;
 	attr.comp_mask |= IBV_EXP_QP_INIT_ATTR_INL_RECV;
+#endif
 
-	return ibv_exp_create_qp(priv->ctx, &attr);
+	return mlx4_create_qp(priv->ctx, &attr);
 }
-
-#else /* INLINE_RECV */
-
-/**
- * Allocate a Queue Pair.
- *
- * @param priv
- *   Pointer to private structure.
- * @param cq
- *   Completion queue to associate with QP.
- * @param desc
- *   Number of descriptors in QP (hint only).
- *
- * @return
- *   QP pointer or NULL in case of error.
- */
-static struct ibv_qp *
-rxq_setup_qp(struct priv *priv, struct ibv_cq *cq, uint16_t desc)
-{
-	struct ibv_qp_init_attr attr = {
-		/* CQ to be associated with the send queue. */
-		.send_cq = cq,
-		/* CQ to be associated with the receive queue. */
-		.recv_cq = cq,
-		.cap = {
-			/* Max number of outstanding WRs. */
-			.max_recv_wr = ((priv->device_attr.max_qp_wr < desc) ?
-					priv->device_attr.max_qp_wr :
-					desc),
-			/* Max number of scatter/gather elements in a WR. */
-			.max_recv_sge = ((priv->device_attr.max_sge <
-					  MLX4_PMD_SGE_WR_N) ?
-					 priv->device_attr.max_sge :
-					 MLX4_PMD_SGE_WR_N),
-		},
-		.qp_type = IBV_QPT_RAW_PACKET
-	};
-
-	return ibv_create_qp(priv->pd, &attr);
-}
-
-#endif /* INLINE_RECV */
 
 #ifdef RSS_SUPPORT
 
 /**
  * Allocate a RSS Queue Pair.
+ * Optionally setup inline receive if supported.
  *
  * @param priv
  *   Pointer to private structure.
