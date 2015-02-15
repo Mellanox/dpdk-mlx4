@@ -2033,10 +2033,10 @@ rxq_mac_addr_add(struct rxq *rxq, unsigned int mac_index)
 		    (rxq_promiscuous_enable(rxq) == 0)) {
 			if (rxq->promisc_flow != NULL)
 				rxq_promiscuous_disable(rxq);
-			WARN("cannot configure normal flow but promiscuous"
-			     " mode is fine, assuming promiscuous optimization"
-			     " is enabled"
-			     " (options mlx4_core log_num_mgm_entry_size=-7)");
+			WARN("Cannot configure normal flow."
+			     " If optimized steering is enabled"
+			     " (options mlx4_core log_num_mgm_entry_size=-7), "
+			     " please check RN and QSG for more information.");
 			priv->promisc_ok = 1;
 			return 0;
 		}
