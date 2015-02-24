@@ -147,15 +147,6 @@ static inline void wr_id_t_check(void)
 	 (((val) & (from)) / ((from) / (to))) : \
 	 (((val) & (from)) * ((to) / (from))))
 
-/* If raw send operations are available, use them since they are faster. */
-#ifdef SEND_RAW_WR_SUPPORT
-typedef struct ibv_send_wr_raw mlx4_send_wr_t;
-#define mlx4_post_send ibv_post_send_raw
-#else
-typedef struct ibv_send_wr mlx4_send_wr_t;
-#define mlx4_post_send ibv_post_send
-#endif
-
 struct mlx4_rxq_stats {
 	unsigned int idx; /**< Mapping index. */
 #ifdef MLX4_PMD_SOFT_COUNTERS
