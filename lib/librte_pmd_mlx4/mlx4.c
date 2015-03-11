@@ -1192,9 +1192,10 @@ mlx4_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		return 0;
 	if (max > pkts_n)
 		max = pkts_n;
+
+	struct txq_elt *elt = &(*txq->elts)[elts_head];
 	for (i = 0; (i != max); ++i) {
 		struct rte_mbuf *buf = pkts[i];
-		struct txq_elt *elt = &(*txq->elts)[elts_head];
 
 		/* Clean up old buffer. */
 		if (likely(elt->mbuf != 0)) {
@@ -1203,7 +1204,6 @@ mlx4_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			/* Faster than rte_pktmbuf_free(). */
 			do {
 				struct rte_mbuf *next = NEXT(tmp);
-
 				rte_pktmbuf_free_seg(tmp);
 				tmp = next;
 			} while (tmp != NULL);
@@ -1231,11 +1231,19 @@ mlx4_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			}
 			if (++elts_head >= elts_n)
 				elts_head = 0;
+			elt = &(*txq->elts)[elts_head];
+			RTE_MBUF_PREFETCH_TO_FREE(elt->mbuf);
 
 			/* continue with next packet */
 			continue;
 		}
 #endif
+
+		/* Prepare for next send element */
+		if (++elts_head >= elts_n)
+			elts_head = 0;
+		elt = &(*txq->elts)[elts_head];
+		RTE_MBUF_PREFETCH_TO_FREE(elt->mbuf);
 
 		/* Set send addr */
 		uint64_t addr = (uintptr_t)rte_pktmbuf_mtod(buf, char *);
@@ -1254,9 +1262,6 @@ mlx4_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			elt->mbuf = NULL;
 			goto stop;
 		}
-
-		if (++elts_head >= elts_n)
-			elts_head = 0;
 
 #if (MLX4_PMD_MAX_INLINE > 0) || defined(MLX4_PMD_SOFT_COUNTERS)
 		/* Increment sent bytes counter. */
