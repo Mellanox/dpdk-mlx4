@@ -2485,7 +2485,7 @@ mlx4_rx_burst_sp(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 				 */
 				DEBUG("rxq=%p, wr_id=%" PRIu64 ":"
 				      " can't allocate a new mbuf",
-				      (void *)rxq, wr_id);
+				      (void *)rxq, wr->wr_id);
 				if (pkt_buf != NULL)
 					rte_pktmbuf_free(pkt_buf);
 				/* Increase out of memory counters. */
@@ -2650,9 +2650,9 @@ mlx4_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		next = &wr->next;
 		if (unlikely(wc->status != IBV_WC_SUCCESS)) {
 			/* Whatever, just repost the offending WR. */
-			DEBUG("rxq=%p, wr_id=%" PRIu32 ": bad work completion"
+			DEBUG("rxq=%p, wr_id=%" PRIu64 ": bad work completion"
 			      " status (%d): %s",
-			      (void *)rxq, wc->status,
+			      (void *)rxq, wr_id, wc->status,
 			      ibv_wc_status_str(wc->status));
 #ifdef MLX4_PMD_SOFT_COUNTERS
 			/* Increase dropped packets counter. */
