@@ -1,123 +1,121 @@
-# Copyright 6WIND 2012-2014, All rights reserved.
-# Copyright Mellanox 2012, All rights reserved.
-
-prefix ?= /usr/local/dpdk-addons
-exec_prefix ?= $(prefix)
-libdir ?= $(exec_prefix)/lib
-datarootdir ?= $(prefix)/share
-docdir ?= $(datarootdir)/doc
-
-# Compile a standalone shared object.
-# Only depends on DPDK headers in $RTE_SDK.
-
-OUT = librte_pmd_mlx4.so
-O ?= .
-Q ?= @
-SOLIB = $O/$(OUT)
-
-SRC = mlx4.c
-HDR = mlx4.h
-OBJ = $(SRC:.c=.o)
-
-CFLAGS_SAVE := $(CFLAGS)
-LDFLAGS_SAVE := $(LDFLAGS)
-RTE_OUTPUT = $(O)
-
-ifndef RTE_SDK
-RTE_SDK = /usr/local/dpdk
-$(warning RTE_SDK is not set, assuming "$(RTE_SDK)".)
-endif
-
-ifndef RTE_TARGET
-RTE_TARGET = build
-$(warning RTE_TARGET is not set, assuming "$(RTE_TARGET)".)
-endif
-
-# Workaround for --no-as-needed linker directive in DPDK 1.8.
-override EXECENV_LDFLAGS =
+#   BSD LICENSE
+#
+#   Copyright 2012-2015 6WIND S.A.
+#   Copyright 2012 Mellanox.
+#
+#   Redistribution and use in source and binary forms, with or without
+#   modification, are permitted provided that the following conditions
+#   are met:
+#
+#     * Redistributions of source code must retain the above copyright
+#       notice, this list of conditions and the following disclaimer.
+#     * Redistributions in binary form must reproduce the above copyright
+#       notice, this list of conditions and the following disclaimer in
+#       the documentation and/or other materials provided with the
+#       distribution.
+#     * Neither the name of 6WIND S.A. nor the names of its
+#       contributors may be used to endorse or promote products derived
+#       from this software without specific prior written permission.
+#
+#   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+#   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+#   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+#   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+#   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+#   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+#   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+#   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+#   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+#   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+#   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 include $(RTE_SDK)/mk/rte.vars.mk
 
-CFLAGS += $(CFLAGS_SAVE)
-CFLAGS += -I$(RTE_SDK)/$(RTE_TARGET)/include
-CFLAGS += -I$(O)
-CFLAGS += -O3 -std=gnu99 -Wall -Wextra -fPIC
-CFLAGS += -D_XOPEN_SOURCE=600
-CFLAGS += -g
+# Library name.
+LIB = librte_pmd_mlx4.a
 
+# Sources.
+SRCS-$(CONFIG_RTE_LIBRTE_MLX4_PMD) += mlx4.c
+
+# Dependencies.
+DEPDIRS-$(CONFIG_RTE_LIBRTE_MLX4_PMD) += lib/librte_ether
+DEPDIRS-$(CONFIG_RTE_LIBRTE_MLX4_PMD) += lib/librte_mbuf
+DEPDIRS-$(CONFIG_RTE_LIBRTE_MLX4_PMD) += lib/librte_eal
+DEPDIRS-$(CONFIG_RTE_LIBRTE_MLX4_PMD) += lib/librte_mempool
+DEPDIRS-$(CONFIG_RTE_LIBRTE_MLX4_PMD) += lib/librte_malloc
+
+# Basic CFLAGS.
+CFLAGS += -O3
+CFLAGS += -std=gnu99 -Wall -Wextra
+CFLAGS += -g
+CFLAGS += -I.
+CFLAGS += -D_XOPEN_SOURCE=600
+CFLAGS += $(WERROR_FLAGS)
+
+# A few warnings cannot be avoided in external headers.
+CFLAGS += -Wno-error=cast-qual
+
+EXPORT_MAP := rte_pmd_mlx4_version.map
+LIBABIVER := 1
+
+# DEBUG which is usually provided on the command-line may enable
+# CONFIG_RTE_LIBRTE_MLX4_DEBUG.
 ifeq ($(DEBUG),1)
+CONFIG_RTE_LIBRTE_MLX4_DEBUG := y
+endif
+
+# User-defined CFLAGS.
+ifeq ($(CONFIG_RTE_LIBRTE_MLX4_DEBUG),y)
 CFLAGS += -pedantic -UNDEBUG -DPEDANTIC
 else
 CFLAGS += -DNDEBUG -UPEDANTIC
 endif
 
-ifdef MLX4_PMD_SGE_WR_N
-CFLAGS += -DMLX4_PMD_SGE_WR_N=$(MLX4_PMD_SGE_WR_N)
+ifdef CONFIG_RTE_LIBRTE_MLX4_SGE_WR_N
+CFLAGS += -DMLX4_PMD_SGE_WR_N=$(CONFIG_RTE_LIBRTE_MLX4_SGE_WR_N)
 endif
 
-ifdef MLX4_PMD_MAX_INLINE
-CFLAGS += -DMLX4_PMD_MAX_INLINE=$(MLX4_PMD_MAX_INLINE)
+ifdef CONFIG_RTE_LIBRTE_MLX4_MAX_INLINE
+CFLAGS += -DMLX4_PMD_MAX_INLINE=$(CONFIG_RTE_LIBRTE_MLX4_MAX_INLINE)
 endif
 
-LDFLAGS += $(LDFLAGS_SAVE)
-LDFLAGS += -shared
-LIBS += -libverbs
+ifdef CONFIG_RTE_LIBRTE_MLX4_TX_MP_CACHE
+CFLAGS += -DMLX4_PMD_TX_MP_CACHE=$(CONFIG_RTE_LIBRTE_MLX4_TX_MP_CACHE)
+endif
 
-all: $(OUT)
+ifdef CONFIG_RTE_LIBRTE_MLX4_SOFT_COUNTERS
+CFLAGS += -DMLX4_PMD_SOFT_COUNTERS=$(CONFIG_RTE_LIBRTE_MLX4_SOFT_COUNTERS)
+endif
 
-install:
-	install -D -m 664 $(SOLIB) $(DESTDIR)$(libdir)/$(notdir $(SOLIB))
+ifdef CONFIG_RTE_LIBRTE_MLX4_COMPAT_VMWARE
+CFLAGS += -DMLX4_PMD_COMPAT_VMWARE=$(CONFIG_RTE_LIBRTE_MLX4_COMPAT_VMWARE)
+endif
 
-doc: doc-default
-doc-%: FORCE
-	$Q $(MAKE) -rR --no-print-directory -C doc \
-		DOC_TOOLS=$(abspath $(DOC_TOOLS)) \
-		O=$(abspath $O)/doc \
-		DESTDIR=$(abspath $(DESTDIR))$(docdir) \
-		$*
+include $(RTE_SDK)/mk/rte.lib.mk
 
-config.h: comp_check.sh
-	$(RM) $@
-	$Q CC="$(CC)" CFLAGS="$(CFLAGS)" sh -- $< \
-		$@ RSS_SUPPORT \
-		infiniband/verbs.h enum IBV_EXP_DEVICE_UD_RSS
-	$Q CC="$(CC)" CFLAGS="$(CFLAGS)" sh -- $< \
-		$@ INLINE_RECV \
-		infiniband/verbs.h enum IBV_EXP_DEVICE_ATTR_INLINE_RECV_SZ
-	$Q CC="$(CC)" CFLAGS="$(CFLAGS)" sh -- $< \
-		$@ SEND_RAW_WR_SUPPORT \
-		infiniband/verbs.h type 'struct ibv_send_wr_raw'
-	$Q CC="$(CC)" \
-		CFLAGS="$(CFLAGS)" sh -- $< \
-		$@ HAVE_STRUCT_RTE_PKTMBUF \
-		rte_mbuf.h type 'struct rte_pktmbuf'
-	$Q CC="$(CC)" \
-		CFLAGS="$(CFLAGS)" sh -- $< \
-		$@ HAVE_MTU_GET \
-		rte_ethdev.h type mtu_get_t
-	$Q CC="$(CC)" \
-		CFLAGS="$(CFLAGS)" sh -- $< \
-		$@ HAVE_MTU_SET \
-		rte_ethdev.h type mtu_set_t
-	$Q CC="$(CC)" \
-		CFLAGS="$(CFLAGS)" sh -- $< \
-		$@ HAVE_FC_CONF_AUTONEG \
-		rte_ethdev.h field 'struct rte_eth_fc_conf.autoneg'
-	$Q CC="$(CC)" \
-		CFLAGS="$(CFLAGS)" sh -- $< \
-		$@ HAVE_FLOW_CTRL_GET \
-		rte_ethdev.h field 'struct eth_dev_ops.flow_ctrl_get'
-	$Q CC="$(CC)" \
-		CFLAGS="$(CFLAGS)" sh -- $< \
-		$@ HAVE_STRUCT_RTE_MBUF_IN_PORT \
-		rte_mbuf.h field 'struct rte_mbuf.in_port'
+# Generate and clean-up mlx4_autoconf.h.
 
-$(OBJ): $(SRC) $(HDR) config.h
+export CC CFLAGS CPPFLAGS EXTRA_CFLAGS EXTRA_CPPFLAGS
+export AUTO_CONFIG_CFLAGS = -Wno-error
 
-$(OUT): $(OBJ)
-	$(CC) $(LDFLAGS) -o $(OUT) $(OBJ) $(LIBS)
+mlx4_autoconf.h: $(RTE_SDK)/scripts/auto-config-h.sh
+	$Q $(RM) -f -- '$@'
+	$Q sh -- '$<' '$@' \
+		RSS_SUPPORT \
+		infiniband/verbs.h \
+		enum IBV_EXP_DEVICE_UD_RSS
+	$Q sh -- '$<' '$@' \
+		INLINE_RECV \
+		infiniband/verbs.h \
+		enum IBV_EXP_DEVICE_ATTR_INLINE_RECV_SZ
+	$Q sh -- '$<' '$@' \
+		SEND_RAW_WR_SUPPORT \
+		infiniband/verbs.h \
+		type 'struct ibv_send_wr_raw'
 
-clean:
-	$(RM) $(OUT) $(OBJ) config.h
+mlx4.o: mlx4_autoconf.h
 
-.PHONY: all clean doc FORCE
+clean_mlx4: FORCE
+	$Q rm -f -- mlx4_autoconf.h
+
+clean: clean_mlx4

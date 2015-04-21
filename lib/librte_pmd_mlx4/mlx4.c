@@ -1,6 +1,34 @@
-/*
- * Copyright 6WIND 2012-2013, All rights reserved.
- * Copyright Mellanox 2012, All rights reserved.
+/*-
+ *   BSD LICENSE
+ *
+ *   Copyright 2012-2015 6WIND S.A.
+ *   Copyright 2012 Mellanox.
+ *
+ *   Redistribution and use in source and binary forms, with or without
+ *   modification, are permitted provided that the following conditions
+ *   are met:
+ *
+ *     * Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *     * Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in
+ *       the documentation and/or other materials provided with the
+ *       distribution.
+ *     * Neither the name of 6WIND S.A. nor the names of its
+ *       contributors may be used to endorse or promote products derived
+ *       from this software without specific prior written permission.
+ *
+ *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 /*
@@ -39,6 +67,7 @@
 #include <rte_config.h>
 #include <rte_ether.h>
 #include <rte_ethdev.h>
+#include <rte_dev.h>
 #include <rte_mbuf.h>
 #include <rte_errno.h>
 #include <rte_mempool.h>
@@ -64,12 +93,8 @@
 #pragma GCC diagnostic error "-pedantic"
 #endif
 
-#ifndef RTE_CACHE_LINE_SIZE
-#define RTE_CACHE_LINE_SIZE CACHE_LINE_SIZE
-#endif
-
-/* System configuration header. */
-#include "config.h"
+/* Generated configuration header. */
+#include "mlx4_autoconf.h"
 
 /* PMD header. */
 #include "mlx4.h"
@@ -89,28 +114,14 @@
 #define ERROR(...) LOG_(ERR, __VA_ARGS__)
 #endif
 
-/* Whether the old mbuf API should be used. */
-#ifdef HAVE_STRUCT_RTE_PKTMBUF
-#define NEXT(m) (m)->pkt.next
-#define DATA_LEN(m) (m)->pkt.data_len
-#define PKT_LEN(m) (m)->pkt.pkt_len
-#define DATA_OFF(m) ((uint8_t *)(m)->pkt.data - (uint8_t *)(m)->buf_addr)
-#define SET_DATA_OFF(m, o) ((m)->pkt.data = ((uint8_t *)(m)->buf_addr + (o)))
-#define NB_SEGS(m) (m)->pkt.nb_segs
-#define IN_PORT(m) (m)->pkt.in_port
-#else
-#define NEXT(m) (m)->next
-#define DATA_LEN(m) (m)->data_len
-#define PKT_LEN(m) (m)->pkt_len
-#define DATA_OFF(m) (m)->data_off
+/* Convenience macros for accessing mbuf fields. */
+#define NEXT(m) ((m)->next)
+#define DATA_LEN(m) ((m)->data_len)
+#define PKT_LEN(m) ((m)->pkt_len)
+#define DATA_OFF(m) ((m)->data_off)
 #define SET_DATA_OFF(m, o) ((m)->data_off = (o))
-#define NB_SEGS(m) (m)->nb_segs
-#ifdef HAVE_STRUCT_RTE_MBUF_IN_PORT
-#define IN_PORT(m) (m)->in_port
-#else
-#define IN_PORT(m) (m)->port
-#endif
-#endif
+#define NB_SEGS(m) ((m)->nb_segs)
+#define PORT(m) ((m)->port)
 
 /* Work Request ID data type (64 bit). */
 typedef union {
@@ -121,7 +132,7 @@ typedef union {
 	uint64_t raw;
 } wr_id_t;
 
-#define WR_ID(o) ((wr_id_t *)&(o))->data
+#define WR_ID(o) (((wr_id_t *)&(o))->data)
 
 /* Compile-time check. */
 static inline void wr_id_t_check(void)
@@ -574,8 +585,6 @@ priv_get_mtu(struct priv *priv, uint16_t *mtu)
 	return 0;
 }
 
-#ifdef HAVE_MTU_SET
-
 /**
  * Set device MTU.
  *
@@ -592,8 +601,6 @@ priv_set_mtu(struct priv *priv, uint16_t mtu)
 {
 	return priv_set_sysfs_ulong(priv, "mtu", mtu);
 }
-
-#endif /* HAVE_MTU_SET */
 
 /**
  * Set device flags.
@@ -954,8 +961,8 @@ txq_mp2mr(struct txq *txq, struct rte_mempool *mp)
 	/* Add a new entry, register MR first. */
 	DEBUG("%p: discovered new memory pool %p", (void *)txq, (void *)mp);
 	mr = ibv_reg_mr(txq->priv->pd,
-		        (void *)mp->elt_va_start,
-		        (mp->elt_va_end - mp->elt_va_start),
+			(void *)mp->elt_va_start,
+			(mp->elt_va_end - mp->elt_va_start),
 			(IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE));
 	if (unlikely(mr == NULL)) {
 		DEBUG("%p: unable to configure MR, ibv_reg_mr() failed.",
@@ -1008,8 +1015,7 @@ linearize_mbuf(linear_t *linear, struct rte_mbuf *buf)
 		       rte_pktmbuf_mtod(buf, uint8_t *),
 		       len);
 		buf = NEXT(buf);
-	}
-	while (buf != NULL);
+	} while (buf != NULL);
 	return size;
 }
 
@@ -1074,8 +1080,7 @@ mlx4_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 
 				rte_pktmbuf_free_seg(tmp);
 				tmp = next;
-			}
-			while (tmp != NULL);
+			} while (tmp != NULL);
 		}
 #ifndef NDEBUG
 		/* For assert(). */
@@ -1189,8 +1194,7 @@ mlx4_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
 
 					rte_pktmbuf_free_seg(buf);
 					buf = next;
-				}
-				while (buf != NULL);
+				} while (buf != NULL);
 				WR_ID(wr->wr_id).offset = 0;
 			}
 			/* Set WR fields and fill SGE with linear buffer. */
@@ -1240,7 +1244,7 @@ stop:
 	if (unlikely(err)) {
 		unsigned int unsent = 0;
 
-		/* An error occured, completion event is lost. Fix counters. */
+		/* An error occurred, completion event is lost. Fix counters. */
 		while (bad_wr != NULL) {
 			struct txq_elt *elt =
 				containerof(bad_wr, struct txq_elt, wr);
@@ -1284,8 +1288,7 @@ stop:
 		DEBUG("%p: mlx4_post_send() failed, %u unprocessed WRs: %s",
 		      (void *)txq, unsent,
 		      ((err <= -1) ? "Internal error" : strerror(err)));
-	}
-	else
+	} else
 		++txq->elts_comp;
 	txq->elts_head = elts_head;
 	return i;
@@ -1383,13 +1386,15 @@ txq_setup(struct rte_eth_dev *dev, struct txq *txq, uint16_t desc,
 		/* Primary port number. */
 		.port_num = priv->port
 	};
-	if ((ret = ibv_exp_modify_qp(tmpl.qp, &attr.mod,
-				 (IBV_EXP_QP_STATE | IBV_EXP_QP_PORT)))) {
+	ret = ibv_exp_modify_qp(tmpl.qp, &attr.mod,
+				(IBV_EXP_QP_STATE | IBV_EXP_QP_PORT));
+	if (ret) {
 		ERROR("%p: QP state to IBV_QPS_INIT failed: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
 	}
-	if ((ret = txq_alloc_elts(&tmpl, desc))) {
+	ret = txq_alloc_elts(&tmpl, desc);
+	if (ret) {
 		ERROR("%p: TXQ allocation failed: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
@@ -1397,13 +1402,15 @@ txq_setup(struct rte_eth_dev *dev, struct txq *txq, uint16_t desc,
 	attr.mod = (struct ibv_exp_qp_attr){
 		.qp_state = IBV_QPS_RTR
 	};
-	if ((ret = ibv_exp_modify_qp(tmpl.qp, &attr.mod, IBV_EXP_QP_STATE))) {
+	ret = ibv_exp_modify_qp(tmpl.qp, &attr.mod, IBV_EXP_QP_STATE);
+	if (ret) {
 		ERROR("%p: QP state to IBV_QPS_RTR failed: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
 	}
 	attr.mod.qp_state = IBV_QPS_RTS;
-	if ((ret = ibv_exp_modify_qp(tmpl.qp, &attr.mod, IBV_EXP_QP_STATE))) {
+	ret = ibv_exp_modify_qp(tmpl.qp, &attr.mod, IBV_EXP_QP_STATE);
+	if (ret) {
 		ERROR("%p: QP state to IBV_QPS_RTS failed: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
@@ -1464,8 +1471,7 @@ mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		}
 		(*priv->txqs)[idx] = NULL;
 		txq_cleanup(txq);
-	}
-	else {
+	} else {
 		txq = rte_calloc_socket("TXQ", 1, sizeof(*txq), 0, socket);
 		if (txq == NULL) {
 			ERROR("%p: unable to allocate queue index %u",
@@ -1572,8 +1578,7 @@ rxq_alloc_elts_sp(struct rxq *rxq, unsigned int elts_n,
 				buf = *(pool++);
 				assert(buf != NULL);
 				rte_pktmbuf_reset(buf);
-			}
-			else
+			} else
 				buf = rte_pktmbuf_alloc(rxq->mp);
 			if (buf == NULL) {
 				assert(pool == NULL);
@@ -1595,8 +1600,7 @@ rxq_alloc_elts_sp(struct rxq *rxq, unsigned int elts_n,
 									char *);
 				sge->length = (buf->buf_len -
 					       RTE_PKTMBUF_HEADROOM);
-			}
-			else {
+			} else {
 				/* Subsequent SGEs lose theirs. */
 				assert(DATA_OFF(buf) == RTE_PKTMBUF_HEADROOM);
 				SET_DATA_OFF(buf, 0);
@@ -1708,8 +1712,7 @@ rxq_alloc_elts(struct rxq *rxq, unsigned int elts_n, struct rte_mbuf **pool)
 			buf = *(pool++);
 			assert(buf != NULL);
 			rte_pktmbuf_reset(buf);
-		}
-		else
+		} else
 			buf = rte_pktmbuf_alloc(rxq->mp);
 		if (buf == NULL) {
 			assert(pool == NULL);
@@ -1909,12 +1912,12 @@ rxq_mac_addr_add(struct rxq *rxq, unsigned int mac_index)
 	specs = (vlans ? vlans : 1);
 
 	/* Allocate flow specification on the stack. */
-	struct ibv_exp_flow_attr data[1 +
-				  (sizeof(struct ibv_exp_flow_spec_eth[specs]) /
-				   sizeof(struct ibv_exp_flow_attr)) +
-				  !!(sizeof(struct ibv_exp_flow_spec_eth[specs]) %
-				  sizeof(struct ibv_exp_flow_attr))];
-
+	struct ibv_exp_flow_attr data
+		[1 +
+		 (sizeof(struct ibv_exp_flow_spec_eth[specs]) /
+		  sizeof(struct ibv_exp_flow_attr)) +
+		 !!(sizeof(struct ibv_exp_flow_spec_eth[specs]) %
+		    sizeof(struct ibv_exp_flow_attr))];
 	struct ibv_exp_flow_attr *attr = (void *)&data[0];
 	struct ibv_exp_flow_spec_eth *spec = (void *)&data[1];
 
@@ -1977,9 +1980,9 @@ rxq_mac_addr_add(struct rxq *rxq, unsigned int mac_index)
 #endif
 	/* Create related flow. */
 	errno = 0;
-	if ((flow = ibv_exp_create_flow(rxq->qp, attr)) == NULL) {
+	flow = ibv_exp_create_flow(rxq->qp, attr);
+	if (flow == NULL) {
 		int err = errno;
-		int disable = 0;
 
 		/* Flow creation failure is not fatal when in DMFS A0 mode.
 		 * Ignore error if promiscuity is already enabled or can be
@@ -1987,8 +1990,8 @@ rxq_mac_addr_add(struct rxq *rxq, unsigned int mac_index)
 		if (priv->promisc_ok)
 			return 0;
 		if ((rxq->promisc_flow != NULL) ||
-		    (disable = 1, rxq_promiscuous_enable(rxq) == 0)) {
-			if (disable)
+		    (rxq_promiscuous_enable(rxq) == 0)) {
+			if (rxq->promisc_flow != NULL)
 				rxq_promiscuous_disable(rxq);
 			WARN("cannot configure normal flow but promiscuous"
 			     " mode is fine, assuming promiscuous optimization"
@@ -2183,7 +2186,8 @@ rxq_allmulticast_enable(struct rxq *rxq)
 	if (rxq->allmulti_flow != NULL)
 		return EBUSY;
 	errno = 0;
-	if ((flow = ibv_exp_create_flow(rxq->qp, &attr)) == NULL) {
+	flow = ibv_exp_create_flow(rxq->qp, &attr);
+	if (flow == NULL) {
 		/* It's not clear whether errno is always set in this case. */
 		ERROR("%p: flow configuration failed, errno=%d: %s",
 		      (void *)rxq, errno,
@@ -2254,7 +2258,8 @@ rxq_promiscuous_enable(struct rxq *rxq)
 	if (rxq->promisc_flow != NULL)
 		return EBUSY;
 	errno = 0;
-	if ((flow = ibv_exp_create_flow(rxq->qp, &attr)) == NULL) {
+	flow = ibv_exp_create_flow(rxq->qp, &attr);
+	if (flow == NULL) {
 		/* It's not clear whether errno is always set in this case. */
 		ERROR("%p: flow configuration failed, errno=%d: %s",
 		      (void *)rxq, errno,
@@ -2435,7 +2440,7 @@ mlx4_rx_burst_sp(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			DATA_LEN(rep) = 0xd00d;
 			PKT_LEN(rep) = 0xdeadd00d;
 			NB_SEGS(rep) = 0x2a;
-			IN_PORT(rep) = 0x2a;
+			PORT(rep) = 0x2a;
 			rep->ol_flags = -1;
 #endif
 			assert(rep->buf_len == seg->buf_len);
@@ -2478,7 +2483,7 @@ mlx4_rx_burst_sp(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		assert(pkt_buf != NULL);
 		assert(j != 0);
 		NB_SEGS(pkt_buf) = j;
-		IN_PORT(pkt_buf) = rxq->port_id;
+		PORT(pkt_buf) = rxq->port_id;
 		PKT_LEN(pkt_buf) = wc->byte_len;
 		pkt_buf->ol_flags = 0;
 
@@ -2489,7 +2494,7 @@ mlx4_rx_burst_sp(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		/* Increase bytes counter. */
 		rxq->stats.ibytes += wc->byte_len;
 #endif
-	repost:
+repost:
 		continue;
 	}
 	*next = NULL;
@@ -2617,7 +2622,7 @@ mlx4_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		/* Update seg information. */
 		SET_DATA_OFF(seg, RTE_PKTMBUF_HEADROOM);
 		NB_SEGS(seg) = 1;
-		IN_PORT(seg) = rxq->port_id;
+		PORT(seg) = rxq->port_id;
 		NEXT(seg) = NULL;
 		PKT_LEN(seg) = len;
 		DATA_LEN(seg) = len;
@@ -2630,7 +2635,7 @@ mlx4_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 		/* Increase bytes counter. */
 		rxq->stats.ibytes += wc->byte_len;
 #endif
-	repost:
+repost:
 		continue;
 	}
 	*next = NULL;
@@ -2797,8 +2802,7 @@ rxq_setup_qp_rss(struct priv *priv, struct ibv_cq *cq, uint16_t desc,
 		attr.qpg.parent_attrib.tss_child_count = 0;
 		attr.qpg.parent_attrib.rss_child_count = priv->rxqs_n;
 		DEBUG("initializing parent RSS queue");
-	}
-	else {
+	} else {
 		attr.qpg.qpg_type = IBV_EXP_QPG_CHILD_RX;
 		attr.qpg.qpg_parent = priv->rxq_parent.qp;
 		DEBUG("initializing child RSS queue");
@@ -2807,8 +2811,6 @@ rxq_setup_qp_rss(struct priv *priv, struct ibv_cq *cq, uint16_t desc,
 }
 
 #endif /* RSS_SUPPORT */
-
-#ifdef HAVE_MTU_SET
 
 /**
  * Reconfigure a RX queue with new parameters.
@@ -2854,8 +2856,7 @@ rxq_rehash(struct rte_eth_dev *dev, struct rxq *rxq)
 	     (tmpl.mb_len - RTE_PKTMBUF_HEADROOM))) {
 		tmpl.sp = 1;
 		desc_n /= MLX4_PMD_SGE_WR_N;
-	}
-	else
+	} else
 		tmpl.sp = 0;
 	DEBUG("%p: %s scattered packets support (%u WRs)",
 	      (void *)dev, (tmpl.sp ? "enabling" : "disabling"), desc_n);
@@ -2879,12 +2880,14 @@ rxq_rehash(struct rte_eth_dev *dev, struct rxq *rxq)
 	/* From now on, any failure will render the queue unusable.
 	 * Reinitialize QP. */
 	mod = (struct ibv_exp_qp_attr){ .qp_state = IBV_QPS_RESET };
-	if ((err = ibv_exp_modify_qp(tmpl.qp, &mod, IBV_EXP_QP_STATE))) {
+	err = ibv_exp_modify_qp(tmpl.qp, &mod, IBV_EXP_QP_STATE);
+	if (err) {
 		ERROR("%p: cannot reset QP: %s", (void *)dev, strerror(err));
 		assert(err > 0);
 		return err;
 	}
-	if ((err = ibv_resize_cq(tmpl.cq, desc_n))) {
+	err = ibv_resize_cq(tmpl.cq, desc_n);
+	if (err) {
 		ERROR("%p: cannot resize CQ: %s", (void *)dev, strerror(err));
 		assert(err > 0);
 		return err;
@@ -2895,12 +2898,13 @@ rxq_rehash(struct rte_eth_dev *dev, struct rxq *rxq)
 		/* Primary port number. */
 		.port_num = priv->port
 	};
-	if ((err = ibv_exp_modify_qp(tmpl.qp, &mod,
-				 (IBV_EXP_QP_STATE |
+	err = ibv_exp_modify_qp(tmpl.qp, &mod,
+				(IBV_EXP_QP_STATE |
 #ifdef RSS_SUPPORT
-				  (parent ? IBV_EXP_QP_GROUP_RSS : 0) |
+				 (parent ? IBV_EXP_QP_GROUP_RSS : 0) |
 #endif /* RSS_SUPPORT */
-				  IBV_EXP_QP_PORT)))) {
+				 IBV_EXP_QP_PORT));
+	if (err) {
 		ERROR("%p: QP state to IBV_QPS_INIT failed: %s",
 		      (void *)dev, strerror(err));
 		assert(err > 0);
@@ -2940,8 +2944,7 @@ rxq_rehash(struct rte_eth_dev *dev, struct rxq *rxq)
 				pool[k++] = elt->bufs[j];
 			}
 		}
-	}
-	else {
+	} else {
 		struct rxq_elt (*elts)[rxq->elts_n] = rxq->elts.no_sp;
 
 		for (i = 0; (i != elemof(*elts)); ++i) {
@@ -2952,7 +2955,7 @@ rxq_rehash(struct rte_eth_dev *dev, struct rxq *rxq)
 			assert(WR_ID(elt->wr.wr_id).id == i);
 			pool[k++] = buf;
 		}
-        }
+	}
 	assert(k == mbuf_n);
 	tmpl.elts_n = 0;
 	tmpl.elts.sp = NULL;
@@ -2974,11 +2977,12 @@ rxq_rehash(struct rte_eth_dev *dev, struct rxq *rxq)
 	rte_free(rxq->elts.sp);
 	rxq->elts.sp = NULL;
 	/* Post WRs. */
-	if ((err = ibv_post_recv(tmpl.qp,
-				 (tmpl.sp ?
-				  &(*tmpl.elts.sp)[0].wr :
-				  &(*tmpl.elts.no_sp)[0].wr),
-				 &bad_wr))) {
+	err = ibv_post_recv(tmpl.qp,
+			    (tmpl.sp ?
+			     &(*tmpl.elts.sp)[0].wr :
+			     &(*tmpl.elts.no_sp)[0].wr),
+			    &bad_wr);
+	if (err) {
 		ERROR("%p: ibv_post_recv() failed for WR %p: %s",
 		      (void *)dev,
 		      (void *)bad_wr,
@@ -2988,7 +2992,8 @@ rxq_rehash(struct rte_eth_dev *dev, struct rxq *rxq)
 	mod = (struct ibv_exp_qp_attr){
 		.qp_state = IBV_QPS_RTR
 	};
-	if ((err = ibv_exp_modify_qp(tmpl.qp, &mod, IBV_EXP_QP_STATE)))
+	err = ibv_exp_modify_qp(tmpl.qp, &mod, IBV_EXP_QP_STATE);
+	if (err)
 		ERROR("%p: QP state to IBV_QPS_RTR failed: %s",
 		      (void *)dev, strerror(err));
 skip_rtr:
@@ -2996,8 +3001,6 @@ skip_rtr:
 	assert(err >= 0);
 	return err;
 }
-
-#endif /* HAVE_MTU_SET */
 
 /**
  * Configure a RX queue.
@@ -3074,7 +3077,7 @@ rxq_setup(struct rte_eth_dev *dev, struct rxq *rxq, uint16_t desc,
 	      (void *)dev, (tmpl.sp ? "enabling" : "disabling"), desc);
 	/* Use the entire RX mempool as the memory region. */
 	tmpl.mr = ibv_reg_mr(priv->pd,
-		             (void *)mp->elt_va_start,
+			     (void *)mp->elt_va_start,
 			     (mp->elt_va_end - mp->elt_va_start),
 			     (IBV_ACCESS_LOCAL_WRITE |
 			      IBV_ACCESS_REMOTE_WRITE));
@@ -3114,19 +3117,21 @@ skip_mr:
 		/* Primary port number. */
 		.port_num = priv->port
 	};
-	if ((ret = ibv_exp_modify_qp(tmpl.qp, &mod,
-				     (IBV_EXP_QP_STATE |
+	ret = ibv_exp_modify_qp(tmpl.qp, &mod,
+				(IBV_EXP_QP_STATE |
 #ifdef RSS_SUPPORT
-				      (parent ? IBV_EXP_QP_GROUP_RSS : 0) |
+				 (parent ? IBV_EXP_QP_GROUP_RSS : 0) |
 #endif /* RSS_SUPPORT */
-				      IBV_EXP_QP_PORT)))) {
+				 IBV_EXP_QP_PORT));
+	if (ret) {
 		ERROR("%p: QP state to IBV_QPS_INIT failed: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
 	}
 	if ((parent) || (!priv->rss))  {
 		/* Configure MAC and broadcast addresses. */
-		if ((ret = rxq_mac_addrs_add(&tmpl))) {
+		ret = rxq_mac_addrs_add(&tmpl);
+		if (ret) {
 			ERROR("%p: QP flow attachment failed: %s",
 			      (void *)dev, strerror(ret));
 			goto error;
@@ -3144,11 +3149,12 @@ skip_mr:
 		      (void *)dev, strerror(ret));
 		goto error;
 	}
-	if ((ret = ibv_post_recv(tmpl.qp,
-				 (tmpl.sp ?
-				  &(*tmpl.elts.sp)[0].wr :
-				  &(*tmpl.elts.no_sp)[0].wr),
-				 &bad_wr))) {
+	ret = ibv_post_recv(tmpl.qp,
+			    (tmpl.sp ?
+			     &(*tmpl.elts.sp)[0].wr :
+			     &(*tmpl.elts.no_sp)[0].wr),
+			    &bad_wr);
+	if (ret) {
 		ERROR("%p: ibv_post_recv() failed for WR %p: %s",
 		      (void *)dev,
 		      (void *)bad_wr,
@@ -3159,7 +3165,8 @@ skip_alloc:
 	mod = (struct ibv_exp_qp_attr){
 		.qp_state = IBV_QPS_RTR
 	};
-	if ((ret = ibv_exp_modify_qp(tmpl.qp, &mod, IBV_EXP_QP_STATE))) {
+	ret = ibv_exp_modify_qp(tmpl.qp, &mod, IBV_EXP_QP_STATE);
+	if (ret) {
 		ERROR("%p: QP state to IBV_QPS_RTR failed: %s",
 		      (void *)dev, strerror(ret));
 		goto error;
@@ -3226,8 +3233,7 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		}
 		(*priv->rxqs)[idx] = NULL;
 		rxq_cleanup(rxq);
-	}
-	else {
+	} else {
 		rxq = rte_calloc_socket("RXQ", 1, sizeof(*rxq), 0, socket);
 		if (rxq == NULL) {
 			ERROR("%p: unable to allocate queue index %u",
@@ -3313,8 +3319,7 @@ mlx4_dev_start(struct rte_eth_dev *dev)
 	if (priv->rss) {
 		rxq = &priv->rxq_parent;
 		r = 1;
-	}
-	else {
+	} else {
 		rxq = (*priv->rxqs)[0];
 		r = priv->rxqs_n;
 	}
@@ -3325,25 +3330,27 @@ mlx4_dev_start(struct rte_eth_dev *dev)
 		/* Ignore nonexistent RX queues. */
 		if (rxq == NULL)
 			continue;
-		if (((ret = rxq_mac_addrs_add(rxq)) == 0) &&
-		    ((!priv->promisc) ||
-		     ((ret = rxq_promiscuous_enable(rxq)) == 0)) &&
-		    ((!priv->allmulti) ||
-		     ((ret = rxq_allmulticast_enable(rxq)) == 0)))
+		ret = rxq_mac_addrs_add(rxq);
+		if (!ret && priv->promisc)
+			ret = rxq_promiscuous_enable(rxq);
+		if (!ret && priv->allmulti)
+			ret = rxq_allmulticast_enable(rxq);
+		if (!ret)
 			continue;
 		WARN("%p: QP flow attachment failed: %s",
 		     (void *)dev, strerror(ret));
 		/* Rollback. */
-		while (i != 0)
-			if ((rxq = (*priv->rxqs)[--i]) != NULL) {
+		while (i != 0) {
+			rxq = (*priv->rxqs)[--i];
+			if (rxq != NULL) {
 				rxq_allmulticast_disable(rxq);
 				rxq_promiscuous_disable(rxq);
 				rxq_mac_addrs_del(rxq);
 			}
+		}
 		priv->started = 0;
 		return -ret;
-	}
-	while ((--r) && ((rxq = (*priv->rxqs)[++i]), i));
+	} while ((--r) && ((rxq = (*priv->rxqs)[++i]), i));
 	priv_unlock(priv);
 	return 0;
 }
@@ -3374,8 +3381,7 @@ mlx4_dev_stop(struct rte_eth_dev *dev)
 	if (priv->rss) {
 		rxq = &priv->rxq_parent;
 		r = 1;
-	}
-	else {
+	} else {
 		rxq = (*priv->rxqs)[0];
 		r = priv->rxqs_n;
 	}
@@ -3387,8 +3393,7 @@ mlx4_dev_stop(struct rte_eth_dev *dev)
 		rxq_allmulticast_disable(rxq);
 		rxq_promiscuous_disable(rxq);
 		rxq_mac_addrs_del(rxq);
-	}
-	while ((--r) && ((rxq = (*priv->rxqs)[++i]), i));
+	} while ((--r) && ((rxq = (*priv->rxqs)[++i]), i));
 	priv_unlock(priv);
 }
 
@@ -3500,8 +3505,7 @@ mlx4_dev_close(struct rte_eth_dev *dev)
 		assert(priv->ctx != NULL);
 		claim_zero(ibv_dealloc_pd(priv->pd));
 		claim_zero(ibv_close_device(priv->ctx));
-	}
-	else
+	} else
 		assert(priv->ctx == NULL);
 	priv_unlock(priv);
 	memset(priv, 0, sizeof(*priv));
@@ -3532,9 +3536,8 @@ mlx4_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *info)
 	max = ((priv->device_attr.max_cq > priv->device_attr.max_qp) ?
 	       priv->device_attr.max_qp : priv->device_attr.max_cq);
 	/* If max >= 65535 then max = 0, max_rx_queues is uint16_t. */
-	if (max >= 65535) {
+	if (max >= 65535)
 		max = 65535;
-	}
 	info->max_rx_queues = max;
 	info->max_tx_queues = max;
 	info->max_mac_addrs = elemof(priv->mac);
@@ -3873,7 +3876,8 @@ mlx4_link_update_unlocked(struct rte_eth_dev *dev, int wait_to_complete)
 	};
 
 	(void)wait_to_complete;
-	if ((errno = ibv_query_port(priv->ctx, priv->port, &port_attr))) {
+	errno = ibv_query_port(priv->ctx, priv->port, &port_attr);
+	if (errno) {
 		WARN("port query failed: %s", strerror(errno));
 		return -1;
 	}
@@ -3914,52 +3918,6 @@ mlx4_link_update(struct rte_eth_dev *dev, int wait_to_complete)
 	return ret;
 }
 
-#ifdef HAVE_MTU_GET
-
-/**
- * DPDK callback to retrieve the current MTU.
- *
- * @param dev
- *   Pointer to Ethernet device structure.
- * @param[out] mtu
- *   MTU output buffer.
- *
- * @return
- *   0 on success, negative errno value on failure.
- */
-static int
-mlx4_dev_get_mtu(struct rte_eth_dev *dev, uint16_t *mtu)
-{
-	struct priv *priv = dev->data->dev_private;
-	int ret;
-
-	priv_lock(priv);
-	if (priv_get_mtu(priv, mtu)) {
-		assert(errno);
-		ret = errno;
-		goto out;
-	}
-	priv->mtu = *mtu;
-	ret = 0;
-out:
-	priv_unlock(priv);
-	assert(ret >= 0);
-	return -ret;
-}
-
-#endif /* HAVE_MTU_GET */
-
-/* Manage transition from 1.6.0.1 to 1.7.0 MTU API. */
-#if defined(HAVE_MTU_SET) && !defined(HAVE_MTU_GET)
-typedef uint16_t mtu_t;
-#define IN_MTU_GET(mtu) (mtu)
-#else
-typedef uint16_t *mtu_t;
-#define IN_MTU_GET(mtu) *(mtu)
-#endif
-
-#ifdef HAVE_MTU_SET
-
 /**
  * DPDK callback to change the MTU.
  *
@@ -3978,9 +3936,8 @@ typedef uint16_t *mtu_t;
  *   0 on success, negative errno value on failure.
  */
 static int
-mlx4_dev_set_mtu(struct rte_eth_dev *dev, mtu_t in_mtu)
+mlx4_dev_set_mtu(struct rte_eth_dev *dev, uint16_t mtu)
 {
-	uint16_t mtu = IN_MTU_GET(in_mtu);
 	struct priv *priv = dev->data->dev_private;
 	int ret = 0;
 	unsigned int i;
@@ -3994,8 +3951,7 @@ mlx4_dev_set_mtu(struct rte_eth_dev *dev, mtu_t in_mtu)
 		WARN("cannot set port %u MTU to %u: %s", priv->port, mtu,
 		     strerror(ret));
 		goto out;
-	}
-	else
+	} else
 		DEBUG("adapter port %u MTU set to %u", priv->port, mtu);
 	priv->mtu = mtu;
 	/* Temporarily replace RX handler with a fake one, assuming it has not
@@ -4021,7 +3977,8 @@ mlx4_dev_set_mtu(struct rte_eth_dev *dev, mtu_t in_mtu)
 		/* Provide new values to rxq_setup(). */
 		dev->data->dev_conf.rxmode.jumbo_frame = sp;
 		dev->data->dev_conf.rxmode.max_rx_pkt_len = max_frame_len;
-		if ((ret = rxq_rehash(dev, rxq))) {
+		ret = rxq_rehash(dev, rxq);
+		if (ret) {
 			/* Force SP RX if that queue requires it and abort. */
 			if (rxq->sp)
 				rx_func = mlx4_rx_burst_sp;
@@ -4048,10 +4005,6 @@ out:
 	assert(ret >= 0);
 	return -ret;
 }
-
-#endif /* HAVE_MTU_SET */
-
-#ifdef HAVE_FLOW_CTRL_GET
 
 /**
  * DPDK callback to get flow control status.
@@ -4084,9 +4037,7 @@ mlx4_dev_get_flow_ctrl(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 		goto out;
 	}
 
-#ifdef HAVE_FC_CONF_AUTONEG
 	fc_conf->autoneg = ethpause.autoneg;
-#endif
 	if (ethpause.rx_pause && ethpause.tx_pause)
 		fc_conf->mode = RTE_FC_FULL;
 	else if (ethpause.rx_pause)
@@ -4102,8 +4053,6 @@ out:
 	assert(ret >= 0);
 	return -ret;
 }
-
-#endif /* HAVE_FLOW_CTRL_GET */
 
 /**
  * DPDK callback to modify flow control parameters.
@@ -4127,9 +4076,7 @@ mlx4_dev_set_flow_ctrl(struct rte_eth_dev *dev, struct rte_eth_fc_conf *fc_conf)
 	int ret;
 
 	ifr.ifr_data = &ethpause;
-#ifdef HAVE_FC_CONF_AUTONEG
 	ethpause.autoneg = fc_conf->autoneg;
-#endif
 	if (((fc_conf->mode & RTE_FC_FULL) == RTE_FC_FULL) ||
 	    (fc_conf->mode & RTE_FC_RX_PAUSE))
 		ethpause.rx_pause = 1;
@@ -4222,8 +4169,7 @@ vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 					rxq_mac_addrs_add((*priv->rxqs)[i]);
 				}
 		}
-	}
-	else if ((!on) && (priv->vlan_filter[j].enabled)) {
+	} else if ((!on) && (priv->vlan_filter[j].enabled)) {
 		/*
 		 * Filter is enabled, disable it.
 		 * Rehashing flows in all RX queues is necessary.
@@ -4299,19 +4245,12 @@ static struct eth_dev_ops mlx4_dev_ops = {
 	.tx_queue_release = mlx4_tx_queue_release,
 	.dev_led_on = NULL,
 	.dev_led_off = NULL,
-#ifdef HAVE_FLOW_CTRL_GET
 	.flow_ctrl_get = mlx4_dev_get_flow_ctrl,
-#endif
 	.flow_ctrl_set = mlx4_dev_set_flow_ctrl,
 	.priority_flow_ctrl_set = NULL,
 	.mac_addr_remove = mlx4_mac_addr_remove,
 	.mac_addr_add = mlx4_mac_addr_add,
-#ifdef HAVE_MTU_GET
-	.mtu_get = mlx4_dev_get_mtu,
-#endif
-#ifdef HAVE_MTU_SET
 	.mtu_set = mlx4_dev_set_mtu,
-#endif
 	.fdir_add_signature_filter = NULL,
 	.fdir_update_signature_filter = NULL,
 	.fdir_remove_signature_filter = NULL,
@@ -4541,7 +4480,7 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		struct ether_addr mac;
 		union ibv_gid temp_gid;
 
-#if RSS_SUPPORT
+#ifdef RSS_SUPPORT
 		exp_device_attr.comp_mask =
 			(IBV_EXP_DEVICE_ATTR_EXP_CAP_FLAGS |
 			 IBV_EXP_DEVICE_ATTR_RSS_TBL_SZ);
@@ -4554,7 +4493,8 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 			goto port_error;
 
 		/* Check port status. */
-		if ((err = ibv_query_port(ctx, port, &port_attr))) {
+		err = ibv_query_port(ctx, port, &port_attr);
+		if (err) {
 			ERROR("port query failed: %s", strerror(err));
 			goto port_error;
 		}
@@ -4575,8 +4515,8 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 
 		/* from rte_ethdev.c */
 		priv = rte_zmalloc("ethdev private structure",
-		                   sizeof(*priv),
-		                   RTE_CACHE_LINE_SIZE);
+				   sizeof(*priv),
+				   RTE_CACHE_LINE_SIZE);
 		if (priv == NULL) {
 			ERROR("priv allocation failure");
 			err = ENOMEM;
@@ -4594,15 +4534,17 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 			INFO("experimental ibv_exp_query_device");
 			goto port_error;
 		}
-		if ((exp_device_attr.exp_device_cap_flags & IBV_EXP_DEVICE_QPG) &&
-		    (exp_device_attr.exp_device_cap_flags & IBV_EXP_DEVICE_UD_RSS) &&
-		    (exp_device_attr.comp_mask & IBV_EXP_DEVICE_ATTR_RSS_TBL_SZ) &&
+		if ((exp_device_attr.exp_device_cap_flags &
+		     IBV_EXP_DEVICE_QPG) &&
+		    (exp_device_attr.exp_device_cap_flags &
+		     IBV_EXP_DEVICE_UD_RSS) &&
+		    (exp_device_attr.comp_mask &
+		     IBV_EXP_DEVICE_ATTR_RSS_TBL_SZ) &&
 		    (exp_device_attr.max_rss_tbl_sz > 0)) {
 			priv->hw_qpg = 1;
 			priv->hw_rss = 1;
 			priv->max_rss_tbl_sz = exp_device_attr.max_rss_tbl_sz;
-		}
-		else {
+		} else {
 			priv->hw_qpg = 0;
 			priv->hw_rss = 0;
 			priv->max_rss_tbl_sz = 0;
@@ -4622,18 +4564,25 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		priv->inl_recv_size = mlx4_getenv_int("MLX4_INLINE_RECV_SIZE");
 
 		if (priv->inl_recv_size) {
-			exp_device_attr.comp_mask = IBV_EXP_DEVICE_ATTR_INLINE_RECV_SZ;
+			exp_device_attr.comp_mask =
+				IBV_EXP_DEVICE_ATTR_INLINE_RECV_SZ;
 			if (ibv_exp_query_device(ctx, &exp_device_attr)) {
-				INFO("Couldn't query device for inline-receive capabilities.");
+				INFO("Couldn't query device for inline-receive"
+				     " capabilities.");
 				priv->inl_recv_size = 0;
 			} else {
-				if ((unsigned int)exp_device_attr.inline_recv_sz < priv->inl_recv_size) {
-					INFO("Max inline-receive(%d) < Requested inline-receive(%u)",
-							exp_device_attr.inline_recv_sz, priv->inl_recv_size);
-					priv->inl_recv_size = exp_device_attr.inline_recv_sz;
+				if ((unsigned)exp_device_attr.inline_recv_sz <
+				    priv->inl_recv_size) {
+					INFO("Max inline-receive (%d) <"
+					     " requested inline-receive (%u)",
+					     exp_device_attr.inline_recv_sz,
+					     priv->inl_recv_size);
+					priv->inl_recv_size =
+						exp_device_attr.inline_recv_sz;
 				}
 			}
-			INFO("Set inline receive size to %u", priv->inl_recv_size);
+			INFO("Set inline receive size to %u",
+			     priv->inl_recv_size);
 		}
 #endif /* INLINE_RECV */
 
@@ -4667,7 +4616,8 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 			char ifname[IF_NAMESIZE];
 
 			if (priv_get_ifname(priv, &ifname) == 0)
-				DEBUG("port %u ifname is \"%s\"", priv->port, ifname);
+				DEBUG("port %u ifname is \"%s\"",
+				      priv->port, ifname);
 			else
 				DEBUG("port %u ifname is unknown", priv->port);
 		}
@@ -4778,9 +4728,22 @@ static struct eth_driver mlx4_driver = {
 	.dev_private_size = sizeof(struct priv)
 };
 
-/* Shared object initializer. */
-static void __attribute__((constructor))
-mlx4_pmd_init(void)
+/**
+ * Driver initialization routine.
+ */
+static int
+rte_mlx4_pmd_init(const char *name, const char *args)
 {
+	(void)name;
+	(void)args;
 	rte_eal_pci_register(&mlx4_driver.pci_drv);
+	return 0;
 }
+
+static struct rte_driver rte_mlx4_driver = {
+	.type = PMD_PDEV,
+	.name = MLX4_DRIVER_NAME,
+	.init = rte_mlx4_pmd_init,
+};
+
+PMD_REGISTER_DRIVER(rte_mlx4_driver)

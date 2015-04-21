@@ -1,6 +1,34 @@
-/*
- * Copyright 6WIND 2012-2013, All rights reserved.
- * Copyright Mellanox 2012, All rights reserved.
+/*-
+ *   BSD LICENSE
+ *
+ *   Copyright 2012-2015 6WIND S.A.
+ *   Copyright 2012 Mellanox.
+ *
+ *   Redistribution and use in source and binary forms, with or without
+ *   modification, are permitted provided that the following conditions
+ *   are met:
+ *
+ *     * Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *     * Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in
+ *       the documentation and/or other materials provided with the
+ *       distribution.
+ *     * Neither the name of 6WIND S.A. nor the names of its
+ *       contributors may be used to endorse or promote products derived
+ *       from this software without specific prior written permission.
+ *
+ *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #ifndef RTE_PMD_MLX4_H_
@@ -40,24 +68,35 @@
  *
  * This value is always 1 for RX queues.
  */
+#ifndef MLX4_PMD_TX_MP_CACHE
 #define MLX4_PMD_TX_MP_CACHE 8
+#endif
 
 /*
  * If defined, only use software counters. The PMD will never ask the hardware
  * for these, and many of them won't be available.
  */
+#ifndef MLX4_PMD_SOFT_COUNTERS
 #define MLX4_PMD_SOFT_COUNTERS 1
+#endif
 
 /*
  * If defined, enable VMware compatibility code. It also requires the
  * environment variable MLX4_COMPAT_VMWARE set to a nonzero value at runtime.
  */
+#ifndef MLX4_COMPAT_VMWARE
 #define MLX4_COMPAT_VMWARE 1
+#endif
 
-#define PCI_VENDOR_ID_MELLANOX 0x15b3
-#define PCI_DEVICE_ID_MELLANOX_CONNECTX3 0x1003
-#define PCI_DEVICE_ID_MELLANOX_CONNECTX3PRO 0x1007
-#define PCI_DEVICE_ID_MELLANOX_CONNECTX3VF 0x1004
+enum {
+	PCI_VENDOR_ID_MELLANOX = 0x15b3,
+};
+
+enum {
+	PCI_DEVICE_ID_MELLANOX_CONNECTX3 = 0x1003,
+	PCI_DEVICE_ID_MELLANOX_CONNECTX3VF = 0x1004,
+	PCI_DEVICE_ID_MELLANOX_CONNECTX3PRO = 0x1007,
+};
 
 #define MLX4_DRIVER_NAME "librte_pmd_mlx4"
 
