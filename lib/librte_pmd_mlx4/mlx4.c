@@ -2696,7 +2696,7 @@ mlx4_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 			 * Unable to allocate a replacement mbuf,
 			 * repost WR.
 			 */
-			DEBUG("rxq=%p, wr_id=%" PRIu32 ":"
+			DEBUG("rxq=%p, wr_id=%" PRIu64 ":"
 			      " can't allocate a new mbuf",
 			      (void *)rxq, wr_id);
 			/* Increase out of memory counters. */
