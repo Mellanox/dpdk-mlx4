@@ -4591,15 +4591,15 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		struct ibv_pd *pd = NULL;
 		struct priv *priv = NULL;
 		struct rte_eth_dev *eth_dev;
-#if defined(INLINE_RECV) || defined(RSS_SUPPORT)
-		struct ibv_exp_device_attr exp_device_attr;
-#endif
 		struct ether_addr mac;
 		union ibv_gid temp_gid;
-
+#if HAVE_EXP_QUERY_DEVICE
+                struct ibv_exp_device_attr exp_device_attr;
+                exp_device_attr.comp_mask = IBV_EXP_DEVICE_ATTR_EXP_CAP_FLAGS;
+#endif
 #ifdef RSS_SUPPORT
 		exp_device_attr.comp_mask =
-			(IBV_EXP_DEVICE_ATTR_EXP_CAP_FLAGS |
+			(exp_device_attr.comp_mask  |
 			 IBV_EXP_DEVICE_ATTR_RSS_TBL_SZ);
 #endif /* RSS_SUPPORT */
 
@@ -4645,11 +4645,14 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		priv->port = port;
 		priv->pd = pd;
 		priv->mtu = ETHER_MTU;
-#ifdef RSS_SUPPORT
+
+#if HAVE_EXP_QUERY_DEVICE
 		if (ibv_exp_query_device(ctx, &exp_device_attr)) {
 			INFO("experimental ibv_exp_query_device");
 			goto port_error;
 		}
+#endif
+#ifdef RSS_SUPPORT
 		if ((exp_device_attr.exp_device_cap_flags &
 		     IBV_EXP_DEVICE_QPG) &&
 		    (exp_device_attr.exp_device_cap_flags &
@@ -4681,15 +4684,22 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		 * ConnectX-3 Pro VFs are reliable as well, but we cannot
 		 * deduce it from the PCI ID.
 		 */
-		priv->hw_csum = (pci_dev->id.device_id ==
-				 PCI_DEVICE_ID_MELLANOX_CONNECTX3PRO);
-		DEBUG("checksum offloading is %ssupported",
-		      (priv->hw_csum ? "" : "not "));
+#if HAVE_EXP_QUERY_DEVICE
+		priv->hw_csum = ((exp_device_attr.exp_device_cap_flags & IBV_EXP_DEVICE_RX_CSUM_L4_PKT) &&
+				(exp_device_attr.exp_device_cap_flags & IBV_EXP_DEVICE_RX_CSUM_L3_PKT));
 
 		priv->hw_csum_l2tun = !!(exp_device_attr.exp_device_cap_flags &
 					 IBV_EXP_DEVICE_L2_TUNNEL_OFFLOADS);
+#else
+		priv->hw_csum = 0; 
+		priv->hw_csum_l2tun = 0;
+
+#endif
+		DEBUG("checksum offloading is %ssupported",
+                      (priv->hw_csum ? "" : "not "));
+	
 		DEBUG("L2 tunnel checksum offloads are %ssupported",
-		      (priv->hw_csum_l2tun ? "" : "not "));
+                      (priv->hw_csum_l2tun ? "" : "not "));
 
 #ifdef INLINE_RECV
 		priv->inl_recv_size = mlx4_getenv_int("MLX4_INLINE_RECV_SIZE");
