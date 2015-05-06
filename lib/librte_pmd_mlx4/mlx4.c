@@ -4814,6 +4814,8 @@ rte_mlx4_pmd_init(const char *name, const char *args)
 {
 	(void)name;
 	(void)args;
+	setenv("RDMAV_HUGEPAGES_SAFE", "1", 1);
+        ibv_fork_init();
 	rte_eal_pci_register(&mlx4_driver.pci_drv);
 	return 0;
 }
