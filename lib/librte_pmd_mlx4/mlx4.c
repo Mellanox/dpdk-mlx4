@@ -306,7 +306,6 @@ struct priv {
 	uint8_t port; /* Physical port number. */
 	unsigned int started:1; /* Device started, flows enabled. */
 	unsigned int promisc:1; /* Device in promiscuous mode. */
-	unsigned int promisc_ok:1; /* Promiscuous flow is supported. */
 	unsigned int allmulti:1; /* Device receives all multicast packets. */
 	unsigned int hw_qpg:1; /* QP groups are supported. */
 	unsigned int hw_tss:1; /* TSS is supported. */
@@ -2042,25 +2041,6 @@ rxq_mac_addr_add(struct rxq *rxq, unsigned int mac_index)
 	errno = 0;
 	flow = mlx_create_flow(rxq->qp, attr);
 	if (flow == NULL) {
-		int err = errno;
-
-		/* Flow creation failure is not fatal when in DMFS A0 mode.
-		 * Ignore error if promiscuity is already enabled or can be
-		 * enabled. */
-		if (priv->promisc_ok)
-			return 0;
-		if ((rxq->promisc_flow != NULL) ||
-		    (rxq_promiscuous_enable(rxq) == 0)) {
-			if (rxq->promisc_flow != NULL)
-				rxq_promiscuous_disable(rxq);
-			WARN("Cannot configure normal flow."
-			     " If optimized steering is enabled"
-			     " (options mlx4_core log_num_mgm_entry_size=-7), "
-			     " please check RN and QSG for more information.");
-			priv->promisc_ok = 1;
-			return 0;
-		}
-		errno = err;
 		/* It's not clear whether errno is always set in this case. */
 		ERROR("%p: flow configuration failed, errno=%d: %s",
 		      (void *)rxq, errno,
