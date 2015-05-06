@@ -116,6 +116,11 @@ mlx4_autoconf.h: $(RTE_SDK)/scripts/auto-config-h.sh
                  $@ HAVE_EXP_QUERY_DEVICE \
                  infiniband/verbs.h \
 		 type 'struct ibv_exp_device_attr' $(AUTOCONF_OUTPUT)
+	$Q sh -- $< \
+                $@ HAVE_STRUCT_IBV_FLOW  \
+                infiniband/verbs.h \
+		type 'struct ibv_flow' $(AUTOCONF_OUTPUT)
+
 mlx4.o: mlx4_autoconf.h
 
 clean_mlx4: FORCE
