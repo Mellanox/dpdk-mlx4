@@ -394,12 +394,18 @@ priv_get_ifname(const struct priv *priv, char (*ifname)[IF_NAMESIZE])
 		     ((name[1] == '.') && (name[2] == '\0'))))
 			continue;
 
-		MKSTR(path, "%s/device/net/%s/dev_id",
-		      priv->ctx->device->ibdev_path, name);
+                MKSTR(path, "%s/device/net/%s/dev_port",
+                          priv->ctx->device->ibdev_path, name);
 
-		file = fopen(path, "rb");
-		if (file == NULL)
-			continue;
+                file = fopen(path, "rb");
+                if (file == NULL) {
+                        MKSTR(path, "%s/device/net/%s/dev_id",
+                                  priv->ctx->device->ibdev_path, name);
+
+                        file = fopen(path, "rb");
+                        if (file == NULL)
+                                continue;
+                }
 		r = fscanf(file, "%x", &dev_id);
 		fclose(file);
 		if ((r == 1) && (dev_id == (priv->port - 1u))) {
