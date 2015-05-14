@@ -4530,22 +4530,28 @@ mlx4_ibv_device_to_pci_addr(const struct ibv_device *device,
 }
 
 /**
- * Derive MAC address from port GID.
+ * Derive MAC address from port interface.
  *
  * @param[out] mac
  *   MAC address output buffer.
- * @param port
- *   Physical port number.
- * @param[in] gid
- *   Port GID.
+ * @param[in] priv
+ *   struct priv for the requested device.
  */
-static void
-mac_from_gid(uint8_t (*mac)[ETHER_ADDR_LEN], uint32_t port, uint8_t *gid)
+
+static int
+get_mac_from_interface(struct priv *priv, uint8_t (*mac)[ETHER_ADDR_LEN])
 {
-	memcpy(&(*mac)[0], gid + 8, 3);
-	memcpy(&(*mac)[3], gid + 13, 3);
-	if (port == 1)
-		(*mac)[0] ^= 2;
+        int ret;
+        struct ifreq request;
+
+        ret = priv_ifreq(priv, SIOCGIFHWADDR, &request);
+        if (ret < 0) {
+                ERROR("Failed to get MAC address, error: %s\n", strerror(errno));
+                return ret;
+        }
+        memcpy(mac, request.ifr_hwaddr.sa_data, ETHER_ADDR_LEN);
+
+        return 0;
 }
 
 /* Support up to 32 adapters. */
@@ -4704,7 +4710,6 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 		struct priv *priv = NULL;
 		struct rte_eth_dev *eth_dev;
 		struct ether_addr mac;
-		union ibv_gid temp_gid;
 #if HAVE_EXP_QUERY_DEVICE
                 struct ibv_exp_device_attr exp_device_attr;
                 exp_device_attr.comp_mask = IBV_EXP_DEVICE_ATTR_EXP_CAP_FLAGS;
@@ -4841,12 +4846,9 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 
 		(void)mlx4_getenv_int;
 		priv->vf = vf;
-		if (ibv_query_gid(ctx, port, 0, &temp_gid)) {
-			ERROR("ibv_query_gid() failure");
-			goto port_error;
-		}
+
 		/* Configure the first MAC address by default. */
-		mac_from_gid(&mac.addr_bytes, port, temp_gid.raw);
+		get_mac_from_interface(priv,&mac.addr_bytes);
 		INFO("port %u MAC address is %02x:%02x:%02x:%02x:%02x:%02x",
 		     priv->port,
 		     mac.addr_bytes[0], mac.addr_bytes[1],
