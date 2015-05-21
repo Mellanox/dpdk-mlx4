@@ -4796,11 +4796,6 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 			      exp_device_attr.max_rss_tbl_sz);
 #endif /* RSS_SUPPORT */
 
-		/*
-		 * Checksum offloading is only reliable on ConnectX-3 Pro.
-		 * ConnectX-3 Pro VFs are reliable as well, but we cannot
-		 * deduce it from the PCI ID.
-		 */
 #if HAVE_EXP_QUERY_DEVICE
 		priv->hw_csum = ((exp_device_attr.exp_device_cap_flags & IBV_EXP_DEVICE_RX_CSUM_L4_PKT) &&
 				(exp_device_attr.exp_device_cap_flags & IBV_EXP_DEVICE_RX_CSUM_L3_PKT));
