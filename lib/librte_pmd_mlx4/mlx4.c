@@ -1929,12 +1929,15 @@ rxq_del_flow(struct rxq *rxq, unsigned int mac_index, unsigned int vlan_index)
 		(const uint8_t (*)[ETHER_ADDR_LEN])
 		priv->mac[mac_index].addr_bytes;
 #endif
-	assert(rxq->mac_flow[mac_index][vlan_index] != NULL);
 	DEBUG("%p: removing MAC address %02x:%02x:%02x:%02x:%02x:%02x"
 			" index %u " "VLAN ID %" PRIu16,
 			(void *)rxq,
 			(*mac)[0], (*mac)[1], (*mac)[2], (*mac)[3], (*mac)[4], (*mac)[5],
 			mac_index, priv->vlan_filter[vlan_index].id);
+	if (rxq->mac_flow[mac_index][vlan_index] == NULL) {
+		DEBUG("The flow is NULL, not destorying\n");
+		return;
+	}
 	claim_zero(mlx_destroy_flow(rxq->mac_flow[mac_index][vlan_index]));
 	rxq->mac_flow[mac_index][vlan_index] = NULL;
 }
