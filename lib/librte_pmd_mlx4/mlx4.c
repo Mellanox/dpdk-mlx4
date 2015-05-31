@@ -4061,6 +4061,7 @@ mlx4_link_update_unlocked(struct rte_eth_dev *dev, int wait_to_complete)
         struct ifreq ifr;
         struct rte_eth_link dev_link;
         int ret;
+	int link_speed = 0;
 
         (void)wait_to_complete;
 
@@ -4072,7 +4073,7 @@ mlx4_link_update_unlocked(struct rte_eth_dev *dev, int wait_to_complete)
                 return -ret;
         }
 
-        dev_link.link_status = !!(ifr.ifr_flags & IFF_UP);
+        dev_link.link_status = !!(ifr.ifr_flags & IFF_UP) && !!(ifr.ifr_flags & IFF_RUNNING);
 
         edata.cmd = ETHTOOL_GSET;
         ifr.ifr_data = &edata;
@@ -4083,7 +4084,11 @@ mlx4_link_update_unlocked(struct rte_eth_dev *dev, int wait_to_complete)
                      strerror(ret));
                 return -ret;
         }
-        dev_link.link_speed = ethtool_cmd_speed(&edata);
+        link_speed = ethtool_cmd_speed(&edata);
+	if (link_speed == -1) 
+		dev_link.link_speed = 0;
+	else
+		dev_link.link_speed = link_speed;
 
         dev_link.link_duplex = (edata.duplex == DUPLEX_HALF) ?
                 ETH_LINK_HALF_DUPLEX : ETH_LINK_FULL_DUPLEX;
