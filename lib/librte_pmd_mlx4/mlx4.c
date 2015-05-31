@@ -4800,11 +4800,11 @@ mlx4_pci_devinit(struct rte_pci_driver *pci_drv, struct rte_pci_device *pci_dev)
 #endif /* RSS_SUPPORT */
 
 #if HAVE_EXP_QUERY_DEVICE
-		priv->hw_csum = ((exp_device_attr.exp_device_cap_flags & IBV_EXP_DEVICE_RX_CSUM_L4_PKT) &&
-				(exp_device_attr.exp_device_cap_flags & IBV_EXP_DEVICE_RX_CSUM_L3_PKT));
+		priv->hw_csum = ((exp_device_attr.exp_device_cap_flags & IBV_EXP_DEVICE_RX_CSUM_TCP_UDP_PKT) &&
+				(exp_device_attr.exp_device_cap_flags & IBV_EXP_DEVICE_RX_CSUM_IP_PKT));
 
 		priv->hw_csum_l2tun = !!(exp_device_attr.exp_device_cap_flags &
-					 IBV_EXP_DEVICE_L2_TUNNEL_OFFLOADS);
+					 IBV_EXP_DEVICE_VXLAN_SUPPORT);
 #else
 		priv->hw_csum = 0; 
 		priv->hw_csum_l2tun = 0;
